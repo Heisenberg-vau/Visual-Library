@@ -1,0 +1,7 @@
+node_modules
+dist
+public/pdfjs
+tests/fixtures/*.pdf
+tests/e2e/out
+*.log
+scratch
