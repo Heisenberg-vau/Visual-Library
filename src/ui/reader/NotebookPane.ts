@@ -7,7 +7,7 @@ import { CLIP_FONT, CLIP_FONT_FAMILY, CLIP_PAD, clipText, makeClipStroke, placeO
 import type { Stroke } from "../../core/annotations/types";
 import type { ClipPayload } from "./ClipCard";
 import { h, icon, iconButton } from "../dom";
-import { confirmDialog, modal, toast } from "../feedback";
+import { confirmDialog, modal, popupMenu, toast } from "../feedback";
 import { InkLayer, type ToolState } from "./InkLayer";
 import { PageScroller } from "./PageScroller";
 
@@ -43,8 +43,19 @@ export function insertPageAfter(doc: NotebookDocument, ink: InkModel, current: n
   return current + 1;
 }
 
-/** Deletes 1-based page `current` after asking (the page is marked meanwhile). */
-export async function deletePageAsk(doc: NotebookDocument, ink: InkModel, current: number, slot?: HTMLElement): Promise<boolean> {
+/**
+ * Deletes 1-based page `current` after asking (the page is marked in red
+ * meanwhile). The toast offers "Hoàn tác", which puts the page and its
+ * writing back, so a slip never loses anything.
+ */
+export async function deletePageAsk(
+  doc: NotebookDocument,
+  ink: InkModel,
+  current: number,
+  slot: HTMLElement | null,
+  changed: (n: number) => void,
+  goTo: (page: number) => void,
+): Promise<boolean> {
   if (doc.numPages <= 1) {
     toast("Vở cần ít nhất 1 trang.");
     return false;
@@ -53,27 +64,60 @@ export async function deletePageAsk(doc: NotebookDocument, ink: InkModel, curren
   const written = ink.strokes(current - 1).length > 0;
   const ok = await confirmDialog(
     `Xóa trang ${current}?`,
-    written
-      ? "Trang đang viền đỏ có ghi chép. Xóa trang sẽ xóa luôn ghi chép trên đó và không hoàn tác được."
-      : "Trang trắng đang viền đỏ sẽ bị xóa.",
+    written ? "Trang đang viền đỏ có ghi chép. Bạn vẫn có thể bấm “Hoàn tác” ngay sau khi xóa." : "Trang trắng đang viền đỏ sẽ bị xóa.",
     "Xóa trang",
     true,
   );
   slot?.classList.remove("deleting");
   if (!ok) return false;
+  const kept = ink.strokes(current - 1).map((s) => ({ ...s }));
   doc.removePage();
   ink.deletePage(current - 1);
-  toast(`Đã xóa trang ${current}.`);
+  changed(doc.numPages);
+  goTo(Math.min(current, doc.numPages));
+  toast(`Đã xóa trang ${current}.`, "info", 8000, {
+    label: "Hoàn tác",
+    run: () => {
+      doc.addPages(1);
+      ink.insertPage(current - 1, kept);
+      changed(doc.numPages);
+      goTo(current);
+      toast(`Đã khôi phục trang ${current}.`);
+    },
+  });
   return true;
+}
+
+/** Menu of page actions, opened from outside the writing area. */
+export function pageMenu(
+  anchor: HTMLElement,
+  doc: NotebookDocument,
+  ink: InkModel,
+  page: number,
+  slotOf: (page: number) => HTMLElement | null,
+  changed: (n: number) => void,
+  goTo: (page: number) => void,
+): void {
+  popupMenu(anchor, [
+    {
+      label: `Chèn trang trắng sau trang ${page}`,
+      run: () => {
+        const p = insertPageAfter(doc, ink, page);
+        changed(doc.numPages);
+        goTo(p);
+      },
+    },
+    { label: `Xóa trang ${page}`, danger: true, run: () => void deletePageAsk(doc, ink, page, slotOf(page), changed, goTo) },
+  ]);
 }
 
 /** Space between notebook pages: room for the "+" button. */
 export const NOTEBOOK_GAP = 40;
 
 /**
- * Page actions drawn on the pages themselves: a "+" in the gap under every
- * page inserts a blank page right there, and a trash icon in the corner
- * deletes that page (after marking it and asking).
+ * A "+" in the gap under every page inserts a blank page right there. The
+ * page itself stays free for writing: deleting lives in the page menu
+ * (notebook header, page thumbnails), never on the page.
  */
 export function notebookPageDecor(doc: NotebookDocument, ink: InkModel, changed: (n: number) => void, goTo: (page: number) => void): (index: number, el: HTMLElement) => void {
   return (index, el) => {
@@ -92,23 +136,7 @@ export function notebookPageDecor(doc: NotebookDocument, ink: InkModel, changed:
       goTo(p);
       toast(`Đã chèn trang ${p}.`);
     });
-    const del = h("button", {
-      class: "page-deco page-del",
-      type: "button",
-      "data-testid": "page-del",
-      title: `Xóa trang ${index + 1}`,
-      "aria-label": `Xóa trang ${index + 1}`,
-      html: icon("trash", 18),
-    });
-    del.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const page = index + 1;
-      if (await deletePageAsk(doc, ink, page, el)) {
-        changed(doc.numPages);
-        goTo(Math.min(page, doc.numPages));
-      }
-    });
-    el.append(add, del);
+    el.append(add);
   };
 }
 
@@ -147,7 +175,19 @@ export class NotebookPane {
     });
     this.unsubGrow = autoExtend(doc, deps.ink, (n) => this.grown(n));
 
-    this.pageLabel = h("span", { class: "nb-page", "data-testid": "nb-page" });
+    // The page number opens the page menu (insert / delete), away from the writing area.
+    this.pageLabel = h("button", { class: "nb-page nb-page-btn", type: "button", "data-testid": "nb-page", title: "Thao tác với trang này" });
+    this.pageLabel.addEventListener("click", () =>
+      pageMenu(
+        this.pageLabel,
+        doc,
+        deps.ink,
+        this.scroller.currentPage,
+        (p) => this.scroller.el.querySelector<HTMLElement>(`.page-slot[data-page="${p}"]`),
+        (n) => this.grown(n),
+        (p) => this.scroller.goToPage(p),
+      ),
+    );
     this.linkBtn = h("button", {
       class: "btn btn-ghost nb-link",
       type: "button",

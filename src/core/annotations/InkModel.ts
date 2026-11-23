@@ -159,8 +159,13 @@ export class InkModel {
    * Inserts a blank page before index `at` (notebooks): later pages move
    * down by one. Undo history is cleared because page numbers changed.
    */
-  insertPage(at: number): void {
+  insertPage(at: number, strokes: Stroke[] = []): void {
     this.shift(at, +1);
+    if (strokes.length) {
+      this.pages.set(at, [...strokes]); // restoring a deleted page
+      this.dirty.add(at);
+      this.emit(at);
+    }
   }
 
   /** Deletes page `at` and its ink; later pages move up by one. */

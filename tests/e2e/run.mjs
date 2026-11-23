@@ -510,8 +510,12 @@ test("milestone 5: create a notebook; it grows when you write on the last page",
   assert.equal(await currentPage(), 2);
   assert.equal((await strokesOn(2)).length, 0, "new page is blank");
   assert.equal((await strokesOn(3)).length, 1, "old page 2 moved to page 3");
-  // Trash in the page's corner: that page is outlined in red while asking.
-  await page.click('.page-slot[data-page="2"] [data-testid="page-del"]');
+  // v0.9.2: nothing but writing on the page itself; delete from the page menu (thumbnails).
+  assert.equal(await page.locator('.page-slot [data-testid="page-del"]').count(), 0, "no delete button on pages");
+  await page.click(".tb-panel");
+  await page.click('.tab[data-tab="thumbs"]');
+  await page.click('.thumb[data-page="2"] [data-testid="thumb-more"]');
+  await page.locator(".menu-item", { hasText: "Xóa trang 2" }).click();
   await page.waitForSelector('.page-slot[data-page="2"].deleting');
   assert.equal(await page.locator(".page-slot.deleting").count(), 1, "only the chosen page is marked");
   assert.match(await page.textContent(".modal"), /Xóa trang 2\?/);
@@ -520,11 +524,20 @@ test("milestone 5: create a notebook; it grows when you write on the last page",
   await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 3");
   assert.equal(await page.locator(".page-slot.deleting").count(), 0);
   assert.equal((await strokesOn(2)).length, 1);
-  // cancel keeps a written page
-  await gotoPage(2);
-  await page.click('.page-slot[data-page="2"] [data-testid="page-del"]');
+  // Deleting a written page, then "Hoàn tác" brings it back with its writing.
+  await page.click('.thumb[data-page="2"] [data-testid="thumb-more"]');
+  await page.locator(".menu-item", { hasText: "Xóa trang 2" }).click();
+  await page.locator(".modal .btn", { hasText: "Xóa trang" }).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 2");
+  await page.locator('[data-testid="toast-action"]').last().click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 3");
+  assert.equal((await strokesOn(2)).length, 1, "writing restored");
+  // cancel keeps a page
+  await page.click('.thumb[data-page="2"] [data-testid="thumb-more"]');
+  await page.locator(".menu-item", { hasText: "Xóa trang 2" }).click();
   await page.locator(".modal .btn", { hasText: "Hủy" }).click();
   assert.equal(await page.textContent('[data-testid="page-total"]'), "/ 3");
+  await page.click(".tb-panel");
   await backToShelf();
   assert.match(await cards().filter({ hasText: "Vở M15" }).textContent(), /Vở · 3 trang/);
 });
@@ -1086,6 +1099,11 @@ test("clip: resize with the corner handle, edit text with a pen tap", async () =
   assert.ok(edited.rects[3] < th, "box shrinks to the shorter text");
   await page.waitForSelector(`${NB} .page-slot[data-page="2"] .ink-clip text`);
   await shot("30-clip-edited");
+  // Split notebook: page actions from the page number in its header.
+  await page.click('[data-testid="nb-page"]');
+  assert.equal(await page.locator(".menu-item", { hasText: "Xóa trang 2" }).count(), 1);
+  await page.keyboard.press("Escape");
+  await page.mouse.click(5, 300);
   await tool("pen");
   await backToShelf();
 });

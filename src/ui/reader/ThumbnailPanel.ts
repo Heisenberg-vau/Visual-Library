@@ -1,7 +1,7 @@
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import { LruCache } from "../../core/util/lru";
 import type { JobScheduler } from "../../core/util/scheduler";
-import { h } from "../dom";
+import { h, icon } from "../dom";
 
 const THUMB_W = 116;
 const BOX_H = 164;
@@ -24,6 +24,8 @@ export class ThumbnailPanel {
     private readonly doc: PagedDocument,
     private readonly scheduler: JobScheduler,
     private readonly onNavigate: (page: number) => void,
+    /** Notebooks: a "⋯" on each thumbnail opens the page menu. */
+    private readonly pageMenu?: (page: number, anchor: HTMLElement) => void,
   ) {
     this.inner = h("div", { class: "thumbs-inner" });
     this.inner.style.height = `${doc.numPages * ITEM_H}px`;
@@ -83,19 +85,17 @@ export class ThumbnailPanel {
     for (let p = first; p <= last; p++) {
       if (this.items.has(p)) continue;
       const box = h("div", { class: "thumb-box" });
-      const item = h(
-        "button",
-        {
-          class: `thumb ${p === this.current ? "current" : ""}`,
-          type: "button",
-          "data-page": p,
-          "aria-label": `Trang ${p}`,
-          style: `top:${(p - 1) * ITEM_H}px`,
-        },
-        box,
-        h("span", { class: "thumb-label" }, String(p)),
-      );
-      item.addEventListener("click", () => this.onNavigate(p));
+      const nav = h("button", { class: "thumb-nav", type: "button", "aria-label": `Trang ${p}` }, box, h("span", { class: "thumb-label" }, String(p)));
+      nav.addEventListener("click", () => this.onNavigate(p));
+      const item = h("div", { class: `thumb ${p === this.current ? "current" : ""}`, "data-page": p, style: `top:${(p - 1) * ITEM_H}px` }, nav);
+      if (this.pageMenu) {
+        const more = h("button", { class: "thumb-more", type: "button", "data-testid": "thumb-more", "aria-label": `Thao tác với trang ${p}`, html: icon("more", 18) });
+        more.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.pageMenu!(p, more);
+        });
+        item.append(more);
+      }
       this.inner.append(item);
       this.items.set(p, item);
       const cached = this.cache.get(p);

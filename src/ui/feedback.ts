@@ -4,12 +4,20 @@ import { h } from "./dom";
 
 let toastHost: HTMLElement | null = null;
 
-export function toast(message: string, kind: "info" | "error" = "info", ms = 3500): void {
+export function toast(message: string, kind: "info" | "error" = "info", ms = 3500, action?: { label: string; run: () => void }): void {
   if (!toastHost) {
     toastHost = h("div", { class: "toast-host", role: "status", "aria-live": "polite" });
     document.body.append(toastHost);
   }
   const t = h("div", { class: `toast toast-${kind}` }, message);
+  if (action) {
+    const b = h("button", { class: "toast-action", type: "button", "data-testid": "toast-action" }, action.label);
+    b.addEventListener("click", () => {
+      action.run();
+      t.remove();
+    });
+    t.append(b);
+  }
   toastHost.append(t);
   setTimeout(() => {
     t.classList.add("toast-out");

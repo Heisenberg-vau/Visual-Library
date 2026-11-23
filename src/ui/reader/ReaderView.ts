@@ -18,7 +18,7 @@ import { h, icon, iconButton } from "../dom";
 import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
 import { InkLayer, type Tool, type ToolState } from "./InkLayer";
-import { NOTEBOOK_GAP, NotebookPane, autoExtend, editTextClip, notebookPageDecor } from "./NotebookPane";
+import { NOTEBOOK_GAP, NotebookPane, autoExtend, editTextClip, notebookPageDecor, pageMenu } from "./NotebookPane";
 import type { Ambience } from "../study/Ambience";
 import type { StudySession } from "../study/StudySession";
 import { OutlinePanel } from "./OutlinePanel";
@@ -151,7 +151,23 @@ export class ReaderView {
       this.scroller.goToPage(p);
       if (window.innerWidth < 900) this.togglePanel(false);
     };
-    this.thumbs = new ThumbnailPanel(doc, this.scheduler, nav);
+    this.thumbs = new ThumbnailPanel(
+      doc,
+      this.scheduler,
+      nav,
+      book.kind === "notebook"
+        ? (p, anchor) =>
+            pageMenu(
+              anchor,
+              doc as NotebookDocument,
+              deps.ink,
+              p,
+              (q) => this.scroller.el.querySelector<HTMLElement>(`.page-slot[data-page="${q}"]`),
+              (n) => this.mainGrown(n),
+              (q) => this.scroller.goToPage(q),
+            )
+        : undefined,
+    );
     this.outline = new OutlinePanel(() => doc.getOutline(), nav);
 
     this.pageInput = h("input", {

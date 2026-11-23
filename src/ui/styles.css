@@ -310,8 +310,9 @@ body.busy::after {
 .sidebar-body { flex: 1; min-height: 0; position: relative; }
 .thumbs, .outline { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; }
 .thumbs-inner { position: relative; }
-.thumb {
-  position: absolute; left: 0; right: 0; height: 198px;
+.thumb { position: absolute; left: 0; right: 0; height: 198px; }
+.thumb-nav {
+  position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   border: 0; background: transparent; cursor: pointer; padding: 0;
 }
@@ -690,3 +691,10 @@ body[data-tone="dark"] .reader-body { background: #2b2d31; }
 .index-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .ocr-status { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .ocr-card-toggle { border: 1px solid #e8c79c; background: #fff; color: #9a5a12; border-radius: 8px; font: inherit; font-size: 12px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
+
+.thumb-more { position: absolute; top: 10px; right: 14px; width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--ink-soft); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.nb-page-btn { border: 1px solid transparent; background: transparent; font: inherit; color: inherit; border-radius: 8px; padding: 6px 10px; min-height: 36px; cursor: pointer; }
+.nb-page-btn:hover, .nb-page-btn:focus-visible { border-color: var(--line); background: #fff; }
+.toast { display: flex; align-items: center; gap: 12px; }
+.toast-action { border: 0; background: transparent; color: #8fc1ff; font: inherit; font-weight: 700; padding: 6px 4px; cursor: pointer; min-height: 36px; }
+.toast-action { pointer-events: auto; }
