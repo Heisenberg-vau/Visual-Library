@@ -1,5 +1,5 @@
 import type { InkModel } from "../../core/annotations/InkModel";
-import type { Margins } from "../../core/annotations/types";
+import type { Margins, PaperPattern } from "../../core/annotations/types";
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
@@ -25,11 +25,17 @@ const PEN_COLORS = ["#1d2430", "#1f5fbf", "#d03a2f", "#1e8a4c", "#7b3fb5", "#e07
 const HL_COLORS = ["#ffd400", "#7ee36a", "#ff8fc7", "#6cc7ff", "#ffa94d"];
 const UL_COLORS = ["#d03a2f", "#1f5fbf", "#1d2430", "#1e8a4c"];
 const PEN_WIDTHS = [1, 1.6, 2.6];
-const MARGIN_PRESETS: { label: string; m: Margins }[] = [
-  { label: "Không nới lề", m: { left: 0, right: 0 } },
-  { label: "Lề phải rộng 30%", m: { left: 0, right: 0.3 } },
-  { label: "Lề phải rộng 60%", m: { left: 0, right: 0.6 } },
-  { label: "Hai bên, mỗi bên 25%", m: { left: 0.25, right: 0.25 } },
+const MARGIN_PRESETS: { label: string; left: number; right: number }[] = [
+  { label: "Không nới lề", left: 0, right: 0 },
+  { label: "Lề phải rộng 30%", left: 0, right: 0.3 },
+  { label: "Lề phải rộng 60%", left: 0, right: 0.6 },
+  { label: "Hai bên, mỗi bên 25%", left: 0.25, right: 0.25 },
+];
+const PATTERNS: { label: string; p: PaperPattern }[] = [
+  { label: "Nền lề: kẻ dòng", p: "lines" },
+  { label: "Nền lề: ô vuông", p: "grid" },
+  { label: "Nền lề: chấm", p: "dots" },
+  { label: "Nền lề: trơn", p: "blank" },
 ];
 
 type PanelTab = "thumbs" | "outline";
@@ -115,7 +121,7 @@ export class ReaderView {
       h("div", { class: "sidebar-body" }, this.thumbs.el, this.outline.el),
     );
 
-    this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory());
+    this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory(), (p) => doc.textChars(p));
     const toolGroup = h("div", { class: "tool-group", "data-testid": "tools" });
     const toolDefs: [Tool, string, string][] = [
       ["hand", "hand", "Chỉ đọc (bút cũng cuộn trang)"],
@@ -260,20 +266,25 @@ export class ReaderView {
 
   private openMargins(anchor: HTMLElement): void {
     const cur = this.scroller.currentMargins;
-    popupMenu(
-      anchor,
-      MARGIN_PRESETS.map(({ label, m }) => ({
-        label: `${m.left === cur.left && m.right === cur.right ? "✓ " : ""}${label}`,
-        run: () => {
-          const shrinking = m.left < cur.left || m.right < cur.right;
-          this.scroller.setMargins(m);
-          this.deps.onMargins(m);
-          if (shrinking && this.deps.ink.pagesWithInk().length) {
-            toast("Ghi chú đã viết ở phần lề vẫn được giữ, nới lề lại là thấy.");
-          }
-        },
+    const pattern = cur.pattern ?? "lines";
+    const apply = (m: Margins) => {
+      const shrinking = m.left < cur.left || m.right < cur.right;
+      this.scroller.setMargins(m);
+      this.deps.onMargins(this.scroller.currentMargins);
+      if (shrinking && this.deps.ink.pagesWithInk().length) {
+        toast("Ghi chú đã viết ở phần lề vẫn được giữ, nới lề lại là thấy.");
+      }
+    };
+    popupMenu(anchor, [
+      ...MARGIN_PRESETS.map((p) => ({
+        label: `${p.left === cur.left && p.right === cur.right ? "✓ " : ""}${p.label}`,
+        run: () => apply({ left: p.left, right: p.right, pattern }),
       })),
-    );
+      ...PATTERNS.map((p) => ({
+        label: `${p.p === pattern ? "✓ " : ""}${p.label}`,
+        run: () => apply({ ...cur, pattern: p.p }),
+      })),
+    ]);
   }
 
   private undo(): void {
@@ -315,6 +326,10 @@ export class ReaderView {
 
   get inkForTests(): InkModel {
     return this.deps.ink;
+  }
+
+  get inkLayerForTests(): InkLayer {
+    return this.ink;
   }
 
   private jumpFromInput(): void {

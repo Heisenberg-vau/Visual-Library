@@ -1,7 +1,8 @@
 import { round1, simplify, snapHorizontal, straighten, strokeHitSegment } from "../../core/annotations/geometry";
 import type { InkModel } from "../../core/annotations/InkModel";
+import { HIGHLIGHT_OPACITY, strokeSvg, svgPathData } from "../../core/annotations/path";
 import type { InkTool, Stroke } from "../../core/annotations/types";
-import { h } from "../dom";
+import { highlightRects, snapUnderline, type CharBox } from "../../core/text/textGeometry";
 import { isStylus, type PageFrame, type PageScroller, type SlotHooks } from "./PageScroller";
 
 export type Tool = "hand" | InkTool | "eraser";
@@ -23,19 +24,20 @@ export const DEFAULT_TOOLS: ToolState = {
 };
 
 const HL_WIDTH = 12;
-const UL_WIDTH = 1.8;
-const HL_ALPHA = 0.38;
+const UL_WIDTH = 1.4;
 const ERASER_PX = 12; // eraser radius in CSS px, independent of zoom
-const MAX_PIXELS = 16_000_000;
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 interface InkSlot {
   index: number;
   el: HTMLElement;
-  hl: HTMLCanvasElement; // highlighter, blended "multiply" so text stays crisp
-  ink: HTMLCanvasElement; // pen + underline
-  live: HTMLCanvasElement; // stroke in progress
+  /** Highlights, blended "multiply" so text under them stays crisp. */
+  hl: SVGSVGElement;
+  /** Pen and underline. */
+  ink: SVGSVGElement;
+  /** Stroke in progress (one path, moved between the two layers). */
+  live: SVGPathElement;
   frame: PageFrame;
-  ratio: number;
 }
 
 interface Gesture {
@@ -55,7 +57,8 @@ let idSeq = 0;
 const newStrokeId = () => `${Date.now().toString(36)}${(idSeq++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 /**
- * Handwriting on top of the page view. Pen (and mouse, for laptops) writes;
+ * Handwriting on top of the page view, drawn as vector SVG so it is razor
+ * sharp at any zoom and screen density. Pen (and mouse, for laptops) writes;
  * fingers keep scrolling and zooming. The stylus never scrolls the page.
  */
 export class InkLayer implements SlotHooks {
@@ -64,12 +67,15 @@ export class InkLayer implements SlotHooks {
   private raf = 0;
   private unsub: () => void;
   private lastPenAt = 0;
+  /** Strokes finishing (text snapping is async); keeps the live path visible. */
+  private pending: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly scroller: PageScroller,
     private readonly model: InkModel,
     private readonly tools: () => ToolState,
     private readonly onHistory: () => void,
+    private readonly textChars: (page: number) => Promise<CharBox[]>,
   ) {
     const el = scroller.el;
     el.addEventListener("pointerdown", this.onDown);
@@ -85,14 +91,29 @@ export class InkLayer implements SlotHooks {
     scroller.hooks = this;
   }
 
+  /** Resolves when the last stroke has been committed (for tests). */
+  settled(): Promise<void> {
+    return this.pending;
+  }
+
   // ---- SlotHooks ----------------------------------------------------
 
   attach(index: number, el: HTMLElement, frame: PageFrame): void {
-    const mk = (cls: string) => h("canvas", { class: `ink-canvas ${cls}` });
-    const s: InkSlot = { index, el, hl: mk("ink-hl"), ink: mk("ink-pen"), live: mk("ink-live"), frame, ratio: 1 };
-    el.append(s.hl, s.ink, s.live);
+    const mk = (cls: string) => {
+      const svg = document.createElementNS(SVG_NS, "svg");
+      svg.setAttribute("class", `ink-svg ${cls}`);
+      svg.setAttribute("preserveAspectRatio", "none");
+      svg.append(document.createElementNS(SVG_NS, "g"));
+      return svg;
+    };
+    const live = document.createElementNS(SVG_NS, "path");
+    live.setAttribute("fill", "none");
+    live.setAttribute("stroke-linejoin", "round");
+    const s: InkSlot = { index, el, hl: mk("ink-hl"), ink: mk("ink-pen"), live, frame };
+    el.append(s.hl, s.ink);
     this.slots.set(index, s);
     this.size(s, frame);
+    this.paint(s);
   }
 
   resize(index: number, frame: PageFrame): void {
@@ -103,40 +124,23 @@ export class InkLayer implements SlotHooks {
   detach(index: number): void {
     const s = this.slots.get(index);
     if (!s) return;
-    for (const c of [s.hl, s.ink, s.live]) {
-      c.width = 0;
-      c.height = 0;
-      c.remove();
-    }
+    s.hl.remove();
+    s.ink.remove();
     this.slots.delete(index);
   }
 
+  /** Vector ink only needs a new viewBox when zoom or margins change. */
   private size(s: InkSlot, f: PageFrame): void {
     s.frame = f;
-    let ratio = Math.min(window.devicePixelRatio || 1, 2);
-    if (f.width * f.height * ratio * ratio > MAX_PIXELS) ratio = Math.sqrt(MAX_PIXELS / (f.width * f.height));
-    s.ratio = ratio;
-    for (const c of [s.hl, s.ink, s.live]) {
-      c.width = Math.max(1, Math.round(f.width * ratio));
-      c.height = Math.max(1, Math.round(f.height * ratio));
+    const w = f.width / f.scale;
+    const hgt = f.height / f.scale;
+    const ox = f.offsetX / f.scale;
+    for (const svg of [s.hl, s.ink]) {
+      svg.setAttribute("viewBox", `${-ox} 0 ${w} ${hgt}`);
     }
-    this.paint(s);
   }
 
   // ---- drawing --------------------------------------------------------
-
-  private ctx(s: InkSlot, c: HTMLCanvasElement): CanvasRenderingContext2D {
-    const ctx = c.getContext("2d")!;
-    const k = s.ratio * s.frame.scale;
-    ctx.setTransform(k, 0, 0, k, s.ratio * s.frame.offsetX, 0);
-    return ctx;
-  }
-
-  private clear(c: HTMLCanvasElement): void {
-    const ctx = c.getContext("2d")!;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, c.width, c.height);
-  }
 
   redraw(page: number): void {
     const s = this.slots.get(page);
@@ -144,29 +148,38 @@ export class InkLayer implements SlotHooks {
   }
 
   private paint(s: InkSlot): void {
-    this.clear(s.hl);
-    this.clear(s.ink);
     const skip = this.gesture?.page === s.index ? this.gesture.erased : null;
-    const hl = this.ctx(s, s.hl);
-    const ink = this.ctx(s, s.ink);
+    let hl = "";
+    let ink = "";
     for (const st of this.model.strokes(s.index)) {
       if (skip?.has(st.id)) continue;
-      drawStroke(st.tool === "highlighter" ? hl : ink, st);
+      if (st.tool === "highlighter") hl += strokeSvg(st);
+      else ink += strokeSvg(st);
     }
+    (s.hl.firstChild as SVGGElement).innerHTML = hl;
+    (s.ink.firstChild as SVGGElement).innerHTML = ink;
   }
 
   private paintLive(): void {
     this.raf = 0;
     const g = this.gesture;
-    if (!g) return;
+    if (!g || g.mode === "erase") return;
     const s = this.slots.get(g.page);
     if (!s) return;
-    this.clear(s.live);
-    if (g.mode === "erase") return;
-    const ctx = this.ctx(s, s.live);
     let pts = g.points;
     if (g.tool === "underline" && pts.length >= 4) pts = snapHorizontal([pts[0], pts[1], pts[pts.length - 2], pts[pts.length - 1]]);
-    drawStroke(ctx, { id: "live", tool: g.tool, color: g.color, width: g.width, points: pts });
+    const live = s.live;
+    const parent = g.tool === "highlighter" ? s.hl : s.ink;
+    if (live.parentNode !== parent) parent.append(live);
+    live.setAttribute("d", svgPathData(pts));
+    live.setAttribute("stroke", g.color);
+    live.setAttribute("stroke-width", String(g.width));
+    live.setAttribute("stroke-linecap", g.tool === "highlighter" ? "butt" : "round");
+    live.setAttribute("stroke-opacity", g.tool === "highlighter" ? String(HIGHLIGHT_OPACITY) : "1");
+  }
+
+  private clearLive(page: number): void {
+    this.slots.get(page)?.live.remove();
   }
 
   private scheduleLive(): void {
@@ -175,7 +188,7 @@ export class InkLayer implements SlotHooks {
 
   // ---- input --------------------------------------------------------
 
-  /** Client point -> page index + PDF point coordinates. */
+  /** Client point -> PDF point coordinates on the page. */
   private toPage(page: number, clientX: number, clientY: number): { x: number; y: number } | null {
     const s = this.slots.get(page);
     if (!s) return null;
@@ -208,6 +221,7 @@ export class InkLayer implements SlotHooks {
     const t = this.tools();
     const erase = t.tool === "eraser" || (e.buttons & 32) !== 0;
     const tool: InkTool = t.tool === "highlighter" || t.tool === "underline" ? t.tool : "pen";
+    if (!erase && tool !== "pen") void this.textChars(page); // warm the cache while drawing
     this.gesture = {
       pointerId: e.pointerId,
       page,
@@ -259,29 +273,41 @@ export class InkLayer implements SlotHooks {
     const g = this.gesture;
     if (!g || e.pointerId !== g.pointerId) return;
     this.gesture = null;
-    const s = this.slots.get(g.page);
-    if (s) this.clear(s.live);
     if (g.mode === "erase") {
       if (g.erased.size) this.model.remove(g.page, g.erased);
       else this.redraw(g.page);
       return;
     }
+    this.pending = this.pending.then(() => this.commit(g)).catch((err) => console.error(err));
+  };
+
+  /** Finishes a stroke: straightening and snapping to the page's text. */
+  private async commit(g: Gesture): Promise<void> {
     let pts = simplify(g.points, 0.25);
+    let rects: number[] | undefined;
     if (g.tool === "underline") {
-      pts = snapHorizontal([pts[0], pts[1], pts[pts.length - 2], pts[pts.length - 1]]);
-      if (Math.hypot(pts[2] - pts[0], pts[3] - pts[1]) < 2) return; // a tap, not a line
+      const seg = snapHorizontal([pts[0], pts[1], pts[pts.length - 2], pts[pts.length - 1]]) as [number, number, number, number];
+      if (Math.hypot(seg[2] - seg[0], seg[3] - seg[1]) < 2) {
+        this.clearLive(g.page);
+        return; // a tap, not a line
+      }
+      pts = snapUnderline(await this.textChars(g.page), seg) ?? seg;
     } else if (g.tool === "highlighter") {
+      const r = highlightRects(await this.textChars(g.page), pts);
+      if (r.length) rects = r.flat().map(round1);
       pts = straighten(pts, 3) ?? pts;
     }
-    this.model.add(g.page, { id: newStrokeId(), tool: g.tool, color: g.color, width: g.width, points: pts.map(round1) });
-  };
+    this.clearLive(g.page);
+    const stroke: Stroke = { id: newStrokeId(), tool: g.tool, color: g.color, width: g.width, points: pts.map(round1) };
+    if (rects) stroke.rects = rects;
+    this.model.add(g.page, stroke);
+  }
 
   private onCancel = (e: PointerEvent): void => {
     const g = this.gesture;
     if (!g || e.pointerId !== g.pointerId) return;
     this.gesture = null;
-    const s = this.slots.get(g.page);
-    if (s) this.clear(s.live);
+    this.clearLive(g.page);
     this.redraw(g.page);
   };
 
@@ -301,7 +327,7 @@ export class InkLayer implements SlotHooks {
   };
 
   private penBusy(): boolean {
-    return (this.gesture !== null && this.gesture.mode !== undefined) || performance.now() - this.lastPenAt < 250;
+    return this.gesture !== null || performance.now() - this.lastPenAt < 250;
   }
 
   destroy(): void {
@@ -310,38 +336,4 @@ export class InkLayer implements SlotHooks {
     this.scroller.hooks = null;
     for (const i of [...this.slots.keys()]) this.detach(i);
   }
-}
-
-/** Smooth polyline through midpoints (quadratic curves). */
-export function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
-  const p = s.points;
-  if (!p.length) return;
-  ctx.save();
-  ctx.strokeStyle = s.color;
-  ctx.fillStyle = s.color;
-  ctx.lineWidth = s.width;
-  ctx.lineJoin = "round";
-  ctx.lineCap = s.tool === "highlighter" ? "butt" : "round";
-  if (s.tool === "highlighter") ctx.globalAlpha = HL_ALPHA;
-  if (p.length === 2) {
-    ctx.beginPath();
-    ctx.arc(p[0], p[1], s.width / 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
-  ctx.beginPath();
-  ctx.moveTo(p[0], p[1]);
-  if (p.length === 4) {
-    ctx.lineTo(p[2], p[3]);
-  } else {
-    for (let i = 2; i < p.length - 2; i += 2) {
-      const mx = (p[i] + p[i + 2]) / 2;
-      const my = (p[i + 1] + p[i + 3]) / 2;
-      ctx.quadraticCurveTo(p[i], p[i + 1], mx, my);
-    }
-    ctx.lineTo(p[p.length - 2], p[p.length - 1]);
-  }
-  ctx.stroke();
-  ctx.restore();
 }

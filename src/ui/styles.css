@@ -1,6 +1,7 @@
 /* Visual Library — all look-and-feel lives here; change freely without
    touching behaviour. Colours and sizes are tokens at the top. */
 :root {
+  color-scheme: only light;
   --ink: #1d2430;
   --ink-soft: #5a6372;
   --paper: #f4f1ea;
@@ -244,11 +245,27 @@ body.busy::after {
   position: absolute; background: #fff;
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.18), 0 6px 18px rgb(0 0 0 / 0.08);
 }
-.page-slot.has-margin { background: #fbfaf6; }
+.page-slot.has-margin { background-color: #ffffff; }
 .page-paper { position: absolute; top: 0; background: #fff; }
-.page-slot.has-margin .page-paper { box-shadow: 0 0 0 1px #e6e1d6; }
+.page-slot.has-margin .page-paper { box-shadow: 0 0 0 1px #d9dde4; }
+/* Writing paper in widened margins; --sp = spacing in CSS px at this zoom. */
+.page-slot[data-pattern="lines"] {
+  background-image: linear-gradient(to bottom, transparent calc(var(--sp) - 1px), #cfd8e6 calc(var(--sp) - 1px));
+  background-size: 100% var(--sp);
+}
+.page-slot[data-pattern="grid"] {
+  background-image: linear-gradient(to bottom, transparent calc(var(--sp) - 1px), #dfe4ec calc(var(--sp) - 1px)),
+    linear-gradient(to right, transparent calc(var(--sp) - 1px), #dfe4ec calc(var(--sp) - 1px));
+  background-size: var(--sp) var(--sp);
+  background-position: var(--ox) 0;
+}
+.page-slot[data-pattern="dots"] {
+  background-image: radial-gradient(circle at center, #b7c0cf 0, #b7c0cf 1.1px, transparent 1.6px);
+  background-size: var(--sp) var(--sp);
+  background-position: calc(var(--ox) + var(--sp) / 2) calc(var(--sp) / 2);
+}
 .page-canvas { display: block; width: 100%; height: 100%; }
-.ink-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.ink-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .ink-hl { mix-blend-mode: multiply; }
 
 /* ink tools */

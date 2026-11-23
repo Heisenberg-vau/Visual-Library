@@ -4,11 +4,14 @@ import {
   PasswordException,
   InvalidPDFException,
   RenderingCancelledException,
+  Util,
   getDocument,
   type PDFDocumentProxy,
   type PDFPageProxy,
 } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { layoutChars, type CharBox, type TextRun } from "../text/textGeometry";
+import { LruCache } from "../util/lru";
 import type { OutlineNode, PageSize } from "../types";
 import { UserFacingError } from "../types";
 import type { PagedDocument } from "./PagedDocument";
@@ -32,6 +35,22 @@ class FileRangeTransport extends PDFDataRangeTransport {
       .then((buf) => this.onDataRange(begin, new Uint8Array(buf)))
       .catch((e) => console.error("range read failed", e));
   }
+}
+
+/** Glyph advance ratios measured with a similar system font. */
+const widthCache = new Map<string, number>();
+let measureCtx: CanvasRenderingContext2D | null = null;
+function measureCharWidth(ch: string, family = "sans-serif"): number {
+  const key = family + "\u0000" + ch;
+  let w = widthCache.get(key);
+  if (w === undefined) {
+    measureCtx ??= document.createElement("canvas").getContext("2d");
+    if (!measureCtx) return 0.5;
+    measureCtx.font = `100px ${family}`;
+    w = measureCtx.measureText(ch).width / 100 || 0.5;
+    widthCache.set(key, w);
+  }
+  return w;
 }
 
 /** Max canvas area. Android Chrome is unstable above ~16.7 M pixels. */
@@ -78,6 +97,7 @@ export class PdfDocument implements PagedDocument {
   private fallback: PageSize = { width: 595, height: 842 };
   private knownCount = 0;
   metaTitle: string | null = null;
+  private textCache = new LruCache<number, Promise<CharBox[]>>(40);
 
   constructor(
     private readonly pdf: PDFDocumentProxy,
@@ -206,6 +226,34 @@ export class PdfDocument implements PagedDocument {
         })),
       );
     return walk(raw as unknown as RawItem[]);
+  }
+
+  textChars(i: number): Promise<CharBox[]> {
+    let p = this.textCache.get(i);
+    if (!p) {
+      p = this.loadText(i).catch(() => []);
+      this.textCache.set(i, p);
+    }
+    return p;
+  }
+
+  private async loadText(i: number): Promise<CharBox[]> {
+    const page = await this.pdf.getPage(i + 1);
+    const vp = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    const styles = content.styles as Record<string, { fontFamily?: string }>;
+    const runs: TextRun[] = [];
+    for (const it of content.items) {
+      if (!("str" in it) || !it.str) continue;
+      const m = Util.transform(vp.transform, it.transform) as TextRun["m"];
+      runs.push({
+        str: it.str,
+        m,
+        width: it.dir === "ttb" ? it.height : it.width,
+        family: styles[it.fontName]?.fontFamily,
+      });
+    }
+    return layoutChars(runs, measureCharWidth);
   }
 
   /** Small JPEG of page 1 for the bookshelf. */

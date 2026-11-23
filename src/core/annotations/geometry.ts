@@ -13,6 +13,15 @@ export function distToSegment(px: number, py: number, ax: number, ay: number, bx
 
 /** True if the point is within `radius` of the stroke's drawn line. */
 export function strokeHit(s: Stroke, x: number, y: number, radius: number): boolean {
+  if (s.rects?.length) {
+    const r = s.rects;
+    for (let i = 0; i + 3 < r.length; i += 4) {
+      if (x >= r[i] - radius && x <= r[i] + r[i + 2] + radius && y >= r[i + 1] - radius && y <= r[i + 1] + r[i + 3] + radius) {
+        return true;
+      }
+    }
+    return false;
+  }
   const p = s.points;
   const r = radius + s.width / 2;
   if (p.length === 2) return Math.hypot(p[0] - x, p[1] - y) <= r;

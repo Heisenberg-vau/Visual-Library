@@ -14,6 +14,11 @@ export interface Stroke {
   width: number;
   /** Flat list x0,y0,x1,y1,… in PDF points (rounded to 0.1). */
   points: number[];
+  /**
+   * Highlights snapped to text: flat x,y,w,h,… rectangles covering the
+   * characters. When present they are drawn instead of `points`.
+   */
+  rects?: number[];
 }
 
 export interface PageInk {
@@ -24,9 +29,16 @@ export interface PageInk {
 }
 
 /** Extra writing space beside every page, as a fraction of page width. */
+export type PaperPattern = "blank" | "lines" | "grid" | "dots";
+
 export interface Margins {
   left: number;
   right: number;
+  /** Background of the widened area. */
+  pattern?: PaperPattern;
 }
 
-export const NO_MARGINS: Margins = { left: 0, right: 0 };
+export const NO_MARGINS: Margins = { left: 0, right: 0, pattern: "lines" };
+
+/** Spacing of the margin background, in PDF points. */
+export const PATTERN_SPACING = 18;

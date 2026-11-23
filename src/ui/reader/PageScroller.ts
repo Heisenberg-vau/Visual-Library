@@ -1,4 +1,4 @@
-import type { Margins } from "../../core/annotations/types";
+import { PATTERN_SPACING, type Margins } from "../../core/annotations/types";
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import { PageLayout, clamp, type PageAnchor } from "../../core/util/layout";
 import type { JobScheduler } from "../../core/util/scheduler";
@@ -127,7 +127,7 @@ export class PageScroller {
 
   /** Widens every page with writing space; keeps the reading position. */
   setMargins(m: Margins): void {
-    this.margins = { left: Math.max(0, m.left), right: Math.max(0, m.right) };
+    this.margins = { left: Math.max(0, m.left), right: Math.max(0, m.right), pattern: m.pattern ?? this.margins.pattern };
     this.relayout();
   }
 
@@ -262,7 +262,11 @@ export class PageScroller {
     st.width = `${this.layout.widths[i]}px`;
     st.height = `${this.layout.heights[i]}px`;
     const f = this.frame(i);
-    s.el.classList.toggle("has-margin", f.width - 0.5 > this.doc.pageSize(i).width * f.scale);
+    const hasMargin = f.width - 0.5 > this.doc.pageSize(i).width * f.scale;
+    s.el.classList.toggle("has-margin", hasMargin);
+    s.el.dataset.pattern = hasMargin ? (this.margins.pattern ?? "lines") : "";
+    st.setProperty("--sp", `${PATTERN_SPACING * f.scale}px`);
+    st.setProperty("--ox", `${f.offsetX}px`);
     const ps = s.paper.style;
     ps.left = `${f.offsetX}px`;
     ps.width = `${this.doc.pageSize(i).width * f.scale}px`;
@@ -294,7 +298,7 @@ export class PageScroller {
       run: async (signal) => {
         if (this.slots.get(s.index) !== s || s.renderedScale === scale) return;
         const canvas = h("canvas", { class: "page-canvas" });
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const dpr = window.devicePixelRatio || 1; // full sharpness; area is capped in renderPage
         await this.doc.renderPage(s.index, canvas, scale, dpr, signal);
         if (signal.aborted || this.slots.get(s.index) !== s) {
           canvas.width = 0;

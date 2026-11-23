@@ -1,3 +1,4 @@
+import type { CharBox } from "../text/textGeometry";
 import type { OutlineNode, PageSize } from "../types";
 
 /**
@@ -31,5 +32,8 @@ export interface PagedDocument {
   ): Promise<void>;
 
   getOutline(): Promise<OutlineNode[]>;
+
+  /** Character boxes of page i (empty for scanned pages without text). */
+  textChars(i: number): Promise<CharBox[]>;
   destroy(): Promise<void>;
 }

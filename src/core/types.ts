@@ -23,7 +23,7 @@ export interface BookMeta {
   /** Free labels; a book can have many. */
   tags: string[];
   /** Widened writing margin beside every page (fractions of page width). */
-  margins: { left: number; right: number };
+  margins: { left: number; right: number; pattern?: "blank" | "lines" | "grid" | "dots" };
 }
 
 /** A shelf. Shelves nest: "Hàng không" > "Động cơ". */

@@ -240,18 +240,16 @@ async function penStroke(pageNo, pts, opts = {}) {
     await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at(p), button: "left", buttons: 1, pointerType });
   }
   await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...at(steps[steps.length - 1]), button: "left", buttons: 0, clickCount: 1, pointerType });
+  await page.evaluate(() => window.__reader?.inkLayerForTests.settled());
 }
-const strokesOn = (pageNo) => page.evaluate((n) => window.__reader.inkForTests.strokes(n - 1).map((s) => ({ tool: s.tool, n: s.points.length, points: s.points })), pageNo);
-/** Non-transparent pixels on a page's ink canvases. */
+const strokesOn = (pageNo) => page.evaluate((n) => window.__reader.inkForTests.strokes(n - 1).map((s) => ({ tool: s.tool, n: s.points.length, points: s.points, rects: s.rects })), pageNo);
+/** Amount of drawn ink (SVG path data length) on a page. */
 const inkPixels = (pageNo) => page.evaluate((n) => {
-  let count = 0;
-  for (const c of document.querySelectorAll(`.page-slot[data-page="${n}"] .ink-canvas`)) {
-    if (!c.width) continue;
-    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-    for (let i = 3; i < d.length; i += 16) if (d[i] > 0) count++;
-  }
-  return count;
+  let len = 0;
+  for (const p of document.querySelectorAll(`.page-slot[data-page="${n}"] .ink-svg path`)) len += (p.getAttribute("d") || "").length;
+  return len;
 }, pageNo);
+const settled = () => page.evaluate(() => window.__reader.inkLayerForTests.settled());
 async function gotoPage(n) {
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type(String(n));
@@ -328,6 +326,36 @@ test("milestone 3: eraser removes strokes; undo and redo", async () => {
   await tool("pen");
 });
 
+test("v0.3.1: highlight snaps to the characters of the line, even when drawn slanted", async () => {
+  await gotoPage(11);
+  await tool("highlighter");
+  // Fixture text: 11pt lines with baselines at 200, 218, 236 pt from the top, starting at x=60.
+  // Slanted stroke across "Line 1 ..." (fractions of a 595 x 842 pt page).
+  await penStroke(11, [[0.15, 0.231], [0.35, 0.236], [0.55, 0.243]]);
+  const [hl] = await strokesOn(11);
+  assert.ok(hl.rects, "stored as text rectangles");
+  assert.equal(hl.rects.length, 4, "one line only");
+  const [x, y, w, h] = hl.rects;
+  assert.ok(Math.abs(y - (200 - 11 * 0.82)) < 0.6, `top at the ascent line, got ${y}`);
+  assert.ok(Math.abs(h - 11 * 1.02) < 0.6, `height of the text line, got ${h}`);
+  assert.ok(x <= 0.15 * 595 + 6 && x + w >= 0.55 * 595 - 6, `spans the dragged characters (${x}..${x + w})`);
+});
+
+test("v0.3.1: underline sits the same distance under the text wherever the pen is", async () => {
+  await tool("underline");
+  await penStroke(11, [[0.15, 224 / 842], [0.5, 224 / 842]]); // ~6pt under line 2 (baseline 218)
+  await penStroke(11, [[0.15, 265 / 842], [0.5, 265 / 842]]); // ~11pt under line 4 (baseline 254)
+  const uls = (await strokesOn(11)).filter((s) => s.tool === "underline");
+  assert.equal(uls.length, 2);
+  const off1 = uls[0].points[1] - 218;
+  const off2 = uls[1].points[1] - 254;
+  assert.ok(Math.abs(off1 - off2) < 0.05, `same offset (${off1} vs ${off2})`);
+  assert.ok(off1 > 0.5 && off1 < 3, `just under the baseline, got ${off1}`);
+  await shot("11-text-snap");
+  await tool("pen");
+  await gotoPage(10);
+});
+
 test("milestone 3: ink stays sharp after zoom and survives reopening", async () => {
   await page.click('button[aria-label="Phóng to"]');
   await waitRendered(10);
@@ -352,6 +380,10 @@ test("milestone 3: widened margin gives space to write beside the page", async (
   const s = await strokesOn(10);
   const margin = s[s.length - 1];
   assert.ok(margin.points[0] > 595, `stroke sits right of the page edge (x=${margin.points[0]})`);
+  assert.equal(await page.getAttribute('.page-slot[data-page="10"]', "data-pattern"), "lines");
+  await page.click('[data-testid="margin-btn"]');
+  await page.locator(".menu-item", { hasText: "Nền lề: ô vuông" }).click();
+  assert.equal(await page.getAttribute('.page-slot[data-page="10"]', "data-pattern"), "grid");
   await shot("10-margin");
   await backToShelf();
   await openBook("650");

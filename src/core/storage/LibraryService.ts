@@ -152,7 +152,7 @@ export class LibraryService {
     this.onDeleteHooks.push(fn);
   }
 
-  async setMargins(id: string, margins: { left: number; right: number }): Promise<void> {
+  async setMargins(id: string, margins: BookMeta["margins"]): Promise<void> {
     await this.meta.update(id, { margins });
   }
 
