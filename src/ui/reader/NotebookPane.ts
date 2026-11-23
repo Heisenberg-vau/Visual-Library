@@ -4,7 +4,7 @@ import type { NotebookDocument } from "../../core/notebook/NotebookDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
 import { h, icon, iconButton } from "../dom";
-import { toast } from "../feedback";
+import { confirmDialog, toast } from "../feedback";
 import { InkLayer, type ToolState } from "./InkLayer";
 import { PageScroller } from "./PageScroller";
 
@@ -28,9 +28,37 @@ export interface NotebookPaneDeps {
  * fresh page below. Shared by the split pane and full-screen notebooks.
  */
 export function autoExtend(doc: NotebookDocument, ink: InkModel, onGrow: (n: number) => void): () => void {
-  return ink.onChange((page) => {
-    if (page === doc.numPages - 1 && ink.strokes(page).length) onGrow(doc.addPages(1));
+  return ink.onAdd((page) => {
+    if (page === doc.numPages - 1) onGrow(doc.addPages(1));
   });
+}
+
+/** Inserts a blank page after 1-based `current`; returns the new page number. */
+export function insertPageAfter(doc: NotebookDocument, ink: InkModel, current: number): number {
+  doc.addPages(1);
+  ink.insertPage(current); // 0-based index of the new page = current
+  return current + 1;
+}
+
+/** Deletes 1-based page `current` (asks first if it has writing). Returns true if deleted. */
+export async function deletePageAsk(doc: NotebookDocument, ink: InkModel, current: number): Promise<boolean> {
+  if (doc.numPages <= 1) {
+    toast("Vở cần ít nhất 1 trang.");
+    return false;
+  }
+  if (ink.strokes(current - 1).length) {
+    const ok = await confirmDialog(
+      `Xóa trang ${current}?`,
+      "Trang này có ghi chép. Xóa trang sẽ xóa luôn ghi chép trên đó và không hoàn tác được.",
+      "Xóa trang",
+      true,
+    );
+    if (!ok) return false;
+  }
+  doc.removePage();
+  ink.deletePage(current - 1);
+  toast(`Đã xóa trang ${current}.`);
+  return true;
 }
 
 /** The exercise book shown beside a book in split view. */
@@ -78,11 +106,20 @@ export class NotebookPane {
       const link = deps.currentBookLink();
       if (link) this.setArmed(link);
     });
-    const addBtn = iconButton("addPage", "Thêm trang vào cuối vở", () => {
-      this.grown(doc.addPages(1));
-      this.scroller.goToPage(doc.numPages);
+    const addBtn = iconButton("addPage", "Chèn trang trắng sau trang này", () => {
+      const p = insertPageAfter(doc, deps.ink, this.scroller.currentPage);
+      this.grown(doc.numPages);
+      this.scroller.goToPage(p);
     });
     addBtn.dataset.testid = "nb-add-page";
+    const delBtn = iconButton("trash", "Xóa trang này", async () => {
+      const cur = this.scroller.currentPage;
+      if (await deletePageAsk(doc, deps.ink, cur)) {
+        this.grown(doc.numPages);
+        this.scroller.goToPage(Math.min(cur, doc.numPages));
+      }
+    });
+    delBtn.dataset.testid = "nb-del-page";
     const closeBtn = iconButton("close", "Đóng vở", () => deps.onClose());
     closeBtn.dataset.testid = "nb-close";
 
@@ -97,6 +134,7 @@ export class NotebookPane {
         this.pageLabel,
         this.linkBtn,
         addBtn,
+        delBtn,
         closeBtn,
       ),
       this.scroller.el,

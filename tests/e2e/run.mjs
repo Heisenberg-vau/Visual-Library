@@ -487,6 +487,21 @@ test("milestone 5: create a notebook; it grows when you write on the last page",
   await penStroke(2, [[0.2, 0.15], [0.5, 0.2], [0.7, 0.15]]);
   await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 3");
   await shot("14-notebook");
+  // v0.5.1: insert a page after page 1, then delete it again
+  await gotoPage(1);
+  await page.click('[data-testid="add-page"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 4");
+  assert.equal(await currentPage(), 2);
+  assert.equal((await strokesOn(2)).length, 0, "new page is blank");
+  assert.equal((await strokesOn(3)).length, 1, "old page 2 moved to page 3");
+  await page.click('[data-testid="del-page"]'); // blank: deleted without asking
+  await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 3");
+  assert.equal((await strokesOn(2)).length, 1);
+  // deleting a written page asks first; cancel keeps it
+  await gotoPage(2);
+  await page.click('[data-testid="del-page"]');
+  await page.locator(".modal .btn", { hasText: "Hủy" }).click();
+  assert.equal(await page.textContent('[data-testid="page-total"]'), "/ 3");
   await backToShelf();
   assert.match(await cards().filter({ hasText: "Vở M15" }).textContent(), /Vở · 3 trang/);
 });
@@ -498,7 +513,7 @@ test("milestone 5: open the notebook beside a book (split view)", async () => {
   await page.waitForSelector(`${NB} .page-slot[data-page="1"] canvas`);
   const book = await page.locator(BOOK).boundingBox();
   const nb = await page.locator(`${NB} .pages-scroller`).boundingBox();
-  assert.ok(book.width > 400 && nb.width > 400, "both panes usable");
+  assert.ok(Math.abs(book.width - nb.width) < 30, `50/50 by default (${book.width} vs ${nb.width})`);
   assert.ok(nb.x > book.x + book.width - 5, "notebook on the right in landscape");
 });
 
@@ -540,6 +555,8 @@ test("milestone 5: the divider resizes the panes and is remembered", async () =>
   const y = d.y + d.height / 2;
   await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x: d.x + d.width / 2, y, button: "left", buttons: 1, clickCount: 1 });
   for (let x = d.x; x >= 450; x -= 40) await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 });
+  await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 450, y, button: "left", buttons: 1 });
+  assert.ok(await page.evaluate(() => document.querySelector('[data-testid="divider"]').classList.contains("dragging")), "divider lights up while dragged");
   await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 450, y, button: "left", buttons: 0, clickCount: 1 });
   const book = await page.locator(BOOK).boundingBox();
   assert.ok(Math.abs(book.width - 450) < 30, `book pane now ~450px (${book.width})`);

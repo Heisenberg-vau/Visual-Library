@@ -101,3 +101,31 @@ describe("InkStore", () => {
     expect(await st.countPages("b2")).toBe(1);
   });
 });
+
+describe("notebook page insert/delete", () => {
+  it("shifts ink and saves every affected page", async () => {
+    const saved = new Map<number, Stroke[]>();
+    const m = new InkModel(
+      new Map([
+        [0, [stroke("a", [1, 1])]],
+        [1, [stroke("b", [1, 1])]],
+        [2, [stroke("c", [1, 1])]],
+      ]),
+      { savePage: async (p, s) => void saved.set(p, s) },
+      0,
+    );
+    m.insertPage(1);
+    expect(m.strokes(1)).toEqual([]);
+    expect(m.strokes(2)[0].id).toBe("b");
+    expect(m.strokes(3)[0].id).toBe("c");
+    m.deletePage(0);
+    expect(m.strokes(0)).toEqual([]);
+    expect(m.strokes(1)[0].id).toBe("b");
+    expect(m.strokes(2)[0].id).toBe("c");
+    expect(m.strokes(3)).toEqual([]);
+    expect(m.canUndo).toBe(false);
+    await m.flush();
+    expect(saved.get(3)).toEqual([]); // old last page cleared on disk
+    expect(saved.get(2)?.[0].id).toBe("c");
+  });
+});

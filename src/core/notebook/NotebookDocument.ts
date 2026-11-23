@@ -41,6 +41,12 @@ export class NotebookDocument implements PagedDocument {
     return this.count;
   }
 
+  /** Removes one page (never the last remaining one). */
+  removePage(): number {
+    if (this.count > 1) this.count -= 1;
+    return this.count;
+  }
+
   pageSize(): PageSize {
     return NOTEBOOK_PAGE;
   }

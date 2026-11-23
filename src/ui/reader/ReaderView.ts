@@ -9,7 +9,7 @@ import { h, icon, iconButton } from "../dom";
 import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
 import { InkLayer, type Tool, type ToolState } from "./InkLayer";
-import { NotebookPane, autoExtend } from "./NotebookPane";
+import { NotebookPane, autoExtend, deletePageAsk, insertPageAfter } from "./NotebookPane";
 import { OutlinePanel } from "./OutlinePanel";
 import { PageScroller } from "./PageScroller";
 import { ThumbnailPanel } from "./ThumbnailPanel";
@@ -194,12 +194,24 @@ export class ReaderView {
     exportBtn.dataset.testid = "export-btn";
     const nbBtn = iconButton("notebook", "Mở vở ghi chép bên cạnh", () => void this.chooseNotebook(nbBtn));
     nbBtn.dataset.testid = "nb-btn";
-    const addPageBtn = iconButton("addPage", "Thêm trang vào cuối vở", () => {
-      this.mainGrown((doc as NotebookDocument).addPages(1));
-      this.scroller.goToPage(doc.numPages);
+    const addPageBtn = iconButton("addPage", "Chèn trang trắng sau trang này", () => {
+      const p = insertPageAfter(doc as NotebookDocument, deps.ink, this.scroller.currentPage);
+      this.mainGrown(doc.numPages);
+      this.scroller.goToPage(p);
     });
     addPageBtn.dataset.testid = "add-page";
-    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, this.isNotebook ? addPageBtn : marginBtn, exportBtn);
+    const delPageBtn = iconButton("trash", "Xóa trang này", async () => {
+      const cur = this.scroller.currentPage;
+      if (await deletePageAsk(doc as NotebookDocument, deps.ink, cur)) {
+        this.mainGrown(doc.numPages);
+        this.scroller.goToPage(Math.min(cur, doc.numPages));
+      }
+    });
+    delPageBtn.dataset.testid = "del-page";
+    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn);
+    if (this.isNotebook) toolGroup.append(addPageBtn, delPageBtn);
+    else toolGroup.append(marginBtn);
+    toolGroup.append(exportBtn);
     if (!this.isNotebook) toolGroup.append(nbBtn);
 
     const toolbar = h(
@@ -496,6 +508,7 @@ export class ReaderView {
   private onDividerDown = (e: PointerEvent): void => {
     e.preventDefault();
     this.divider.setPointerCapture(e.pointerId);
+    this.divider.classList.add("dragging");
     const rect = this.main.getBoundingClientRect();
     const vertical = getComputedStyle(this.main).flexDirection === "column";
     let ratio = this.deps.notebooks.splitRatio;
@@ -504,6 +517,7 @@ export class ReaderView {
       this.applyRatio(ratio);
     };
     const up = () => {
+      this.divider.classList.remove("dragging");
       this.divider.removeEventListener("pointermove", move);
       this.divider.removeEventListener("pointerup", up);
       this.divider.removeEventListener("pointercancel", up);

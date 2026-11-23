@@ -17,6 +17,7 @@ export class InkModel {
   private undoStack: Op[] = [];
   private redoStack: Op[] = [];
   private listeners = new Set<(page: number) => void>();
+  private addListeners = new Set<(page: number) => void>();
   private dirty = new Set<number>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private saving: Promise<void> = Promise.resolve();
@@ -59,6 +60,13 @@ export class InkModel {
     this.undoStack.push(op);
     this.redoStack = [];
     this.emit(page);
+    for (const fn of this.addListeners) fn(page);
+  }
+
+  /** Fires only when the user adds a stroke (not on undo, delete or page shifts). */
+  onAdd(fn: (page: number) => void): () => void {
+    this.addListeners.add(fn);
+    return () => void this.addListeners.delete(fn);
   }
 
   /** Removes strokes (by id) from a page as ONE undo step. */
@@ -128,6 +136,40 @@ export class InkModel {
   /** Notifies after the undo/redo stacks are updated, so UI state is right. */
   private emit(page: number): void {
     for (const fn of this.listeners) fn(page);
+  }
+
+  /**
+   * Inserts a blank page before index `at` (notebooks): later pages move
+   * down by one. Undo history is cleared because page numbers changed.
+   */
+  insertPage(at: number): void {
+    this.shift(at, +1);
+  }
+
+  /** Deletes page `at` and its ink; later pages move up by one. */
+  deletePage(at: number): void {
+    this.shift(at, -1);
+  }
+
+  private shift(at: number, delta: 1 | -1): void {
+    const old = this.pages;
+    const next = new Map<number, Stroke[]>();
+    const maxPage = Math.max(at, ...old.keys());
+    for (const [p, list] of old) {
+      if (p < at) next.set(p, list);
+      else if (delta === 1) next.set(p + 1, list);
+      else if (p > at) next.set(p - 1, list);
+    }
+    this.pages = next;
+    this.undoStack = [];
+    this.redoStack = [];
+    // Every page from `at` on may have changed: rewrite them all.
+    for (let p = at; p <= maxPage + 1; p++) {
+      this.dirty.add(p);
+      this.emit(p);
+    }
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => void this.flush(), this.saveDelayMs);
   }
 
   /** Writes pending pages now. Call before closing the book. */

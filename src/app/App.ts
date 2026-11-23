@@ -84,7 +84,7 @@ export class App {
   private async notebookHost(book: BookMeta): Promise<NotebookHost> {
     const companionKey = `companion:${book.id}`;
     const companionId = await this.meta.getSetting<string | null>(companionKey, null);
-    const splitRatio = await this.meta.getSetting<number>("splitRatio", 0.55);
+    const splitRatio = await this.meta.getSetting<number>("splitRatio", 0.5);
     const host: NotebookHost = {
       list: async () => (await this.library.list()).filter((b) => b.kind === "notebook"),
       create: (name, paper) => this.library.createNotebook(name, book.kind === "notebook" ? null : book.categoryId, paper),
