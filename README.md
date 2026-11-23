@@ -9,11 +9,14 @@ App đọc và ghi chú tài liệu cho Xiaomi Pad 8 Pro + Focus Pen Pro. Đây 
 | Mốc | Nội dung | Trạng thái |
 |---|---|---|
 | 1 | Nhập PDF, kệ sách, nhảy trang, mục lục, ảnh thu nhỏ, zoom | ✅ v0.1.0 |
-| 2 | Viết tay: bút nét cố định, highlight, tẩy, undo | |
-| 3 | Xuất "bản có ghi chú" ra file PDF mới (bản gốc giữ nguyên) | |
-| 4 | Trang ghi chú trắng: kẻ dòng / ô vuông / chấm | |
-| 5 | Tìm kiếm chữ, sửa bảng mã font, OCR chạy ngầm | |
-| 6 | Mở file Word .docx | |
+| 2 | Danh mục nhiều tầng, thẻ, chọn nhiều để chuyển/gắn thẻ/xóa | ✅ v0.2.0 |
+| 3 | Viết tay: bút nét cố định, highlight, gạch chân, tẩy, undo, nới rộng lề | |
+| 4 | Xuất "bản có ghi chú" ra file PDF mới (bản gốc giữ nguyên) | |
+| 5 | Sổ ghi chép chia đôi màn hình (nền kẻ dòng / ô / chấm, liên kết về trang sách) | |
+| 6 | Trải nghiệm học: focus mode, đếm giờ + nhắc nghỉ, lọc ánh sáng, kế hoạch học | |
+| 7 | Tìm kiếm chữ, sửa bảng mã font, OCR chạy ngầm | |
+| 8 | Mở file Word .docx | |
+| Bản 2 | Giao diện thư viện / kệ / bàn học, âm thanh thư giãn | |
 
 ## Cài lên Pad
 

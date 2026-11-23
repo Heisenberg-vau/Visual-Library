@@ -1,13 +1,14 @@
 /** Minimal promise wrapper over IndexedDB (no dependency). */
 
 export const DB_NAME = "visual-library";
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export const STORES = {
   books: "books", // BookMeta, keyPath id
   covers: "covers", // Blob keyed by book id
   blobs: "blobs", // original files when OPFS is unavailable
   settings: "settings", // key/value
+  categories: "categories", // Category, keyPath id (v2)
 } as const;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -27,6 +28,10 @@ export function openDb(factory: IDBFactory = indexedDB): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORES.covers)) db.createObjectStore(STORES.covers);
       if (!db.objectStoreNames.contains(STORES.blobs)) db.createObjectStore(STORES.blobs);
       if (!db.objectStoreNames.contains(STORES.settings)) db.createObjectStore(STORES.settings);
+      // v2: shelves. Books from v1 get categoryId/tags filled in on read.
+      if (!db.objectStoreNames.contains(STORES.categories)) {
+        db.createObjectStore(STORES.categories, { keyPath: "id" });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => {
@@ -48,6 +53,21 @@ export function reqToPromise<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+  });
+}
+
+/** Several stores in one transaction (all-or-nothing). */
+export async function txMulti(
+  stores: string[],
+  fn: (get: (name: string) => IDBObjectStore) => void,
+): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(stores, "readwrite");
+    fn((name) => t.objectStore(name));
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error ?? new Error("transaction aborted"));
   });
 }
 

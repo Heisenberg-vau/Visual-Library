@@ -6,7 +6,7 @@ import { fileFingerprint } from "../core/util/fingerprint";
 import type { BookMeta } from "../core/types";
 import { UserFacingError } from "../core/types";
 import { toast } from "../ui/feedback";
-import { LibraryView } from "../ui/library/LibraryView";
+import { LibraryView, type ShelfView } from "../ui/library/LibraryView";
 import { ReaderView } from "../ui/reader/ReaderView";
 
 /** Composition root: builds the layers and switches between screens. */
@@ -32,11 +32,14 @@ export class App {
   private opening = false;
 
   constructor(private readonly root: HTMLElement) {
-    this.library = new LibraryService(new MetaStore(), createFileStore(), pdfInspector);
+    const meta = new MetaStore();
+    this.library = new LibraryService(meta, createFileStore(), pdfInspector);
     this.libraryView = new LibraryView({
       library: this.library,
       onOpen: (b) => void this.open(b),
       onFirstImport: () => void requestPersistentStorage(),
+      loadView: () => meta.getSetting<ShelfView>("libraryView", { kind: "all" }),
+      saveView: (v) => void meta.setSetting("libraryView", v),
     });
     window.addEventListener("popstate", () => {
       if (this.reader && !location.hash.startsWith("#read/")) void this.closeReader(false);

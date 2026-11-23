@@ -1,4 +1,5 @@
-import type { BookMeta } from "../types";
+import type { BookMeta, Category } from "../types";
+import { compareNames, mergeTags, sameTag, subtreeIds } from "../library/shelves";
 import { UserFacingError } from "../types";
 import type { FileStore } from "./FileStore";
 import type { MetaStore } from "./MetaStore";
@@ -62,13 +63,15 @@ export class LibraryService {
     return this.files.read(id);
   }
 
+  /** Imports onto `categoryId` (null = "Chưa phân loại"). */
   async importFiles(
     list: File[],
     onProgress?: (p: ImportProgress) => void,
+    categoryId: string | null = null,
   ): Promise<ImportResult[]> {
     const out: ImportResult[] = [];
     for (let i = 0; i < list.length; i++) {
-      out.push(await this.importOne(list[i], i, list.length, onProgress));
+      out.push(await this.importOne(list[i], i, list.length, onProgress, categoryId));
     }
     return out;
   }
@@ -78,6 +81,7 @@ export class LibraryService {
     index: number,
     total: number,
     onProgress?: (p: ImportProgress) => void,
+    categoryId: string | null = null,
   ): Promise<ImportResult> {
     const report = (phase: ImportProgress["phase"], fraction: number) =>
       onProgress?.({ fileName: file.name, index, total, phase, fraction });
@@ -110,6 +114,8 @@ export class LibraryService {
         lastOpenedAt: null,
         lastPage: 1,
         zoom: 1,
+        categoryId,
+        tags: [],
       };
       await this.meta.put(book);
       if (info.cover) await this.meta.putCover(id, info.cover);
@@ -136,6 +142,109 @@ export class LibraryService {
   async delete(id: string): Promise<void> {
     await this.files.delete(id);
     await this.meta.delete(id);
+  }
+
+  // ---- shelves -----------------------------------------------------
+
+  listCategories(): Promise<Category[]> {
+    return this.meta.listCategories();
+  }
+
+  private async checkName(name: string, parentId: string | null, exceptId?: string): Promise<string> {
+    const n = name.replace(/\s+/g, " ").trim().slice(0, 60);
+    if (!n) throw new UserFacingError("Tên danh mục không được để trống.");
+    const all = await this.meta.listCategories();
+    const clash = all.find(
+      (c) => c.parentId === parentId && c.id !== exceptId && compareNames(c.name, n) === 0,
+    );
+    if (clash) throw new UserFacingError(`Đã có danh mục “${clash.name}” ở đây.`);
+    return n;
+  }
+
+  async createCategory(name: string, parentId: string | null): Promise<Category> {
+    const c: Category = {
+      id: newId(),
+      name: await this.checkName(name, parentId),
+      parentId,
+      createdAt: Date.now(),
+    };
+    await this.meta.putCategory(c);
+    return c;
+  }
+
+  async renameCategory(id: string, name: string): Promise<void> {
+    const all = await this.meta.listCategories();
+    const c = all.find((x) => x.id === id);
+    if (!c) return;
+    await this.meta.putCategory({ ...c, name: await this.checkName(name, c.parentId, id) });
+  }
+
+  /** Moves a shelf under another (null = top level). */
+  async moveCategory(id: string, newParentId: string | null): Promise<void> {
+    const all = await this.meta.listCategories();
+    const c = all.find((x) => x.id === id);
+    if (!c) return;
+    if (newParentId && subtreeIds(all, id).has(newParentId)) {
+      throw new UserFacingError("Không thể chuyển danh mục vào bên trong chính nó.");
+    }
+    const name = await this.checkName(c.name, newParentId, id);
+    await this.meta.putCategory({ ...c, name, parentId: newParentId });
+  }
+
+  /**
+   * Deletes a shelf. Its books and sub-shelves move up to the parent shelf,
+   * so deleting a shelf never deletes a book.
+   */
+  async deleteCategory(id: string): Promise<void> {
+    const all = await this.meta.listCategories();
+    const c = all.find((x) => x.id === id);
+    if (!c) return;
+    const children = all.filter((x) => x.parentId === id).map((x) => ({ ...x, parentId: c.parentId }));
+    // Keep sibling names unique after the move.
+    const siblings = all.filter((x) => x.parentId === c.parentId && x.id !== id);
+    for (const ch of children) {
+      let n = ch.name;
+      let k = 2;
+      while (siblings.some((s) => compareNames(s.name, n) === 0)) n = `${ch.name} (${k++})`;
+      ch.name = n;
+      siblings.push(ch);
+    }
+    const books = (await this.meta.list())
+      .filter((b) => b.categoryId === id)
+      .map((b) => ({ ...b, categoryId: c.parentId }));
+    await this.meta.deleteCategory(id, books, children);
+  }
+
+  async moveBooks(ids: string[], categoryId: string | null): Promise<void> {
+    const set = new Set(ids);
+    const books = (await this.meta.list()).filter((b) => set.has(b.id));
+    await this.meta.putMany(books.map((b) => ({ ...b, categoryId })));
+  }
+
+  // ---- tags ---------------------------------------------------------
+
+  async setTags(id: string, tags: string[]): Promise<void> {
+    await this.meta.update(id, { tags: mergeTags([], tags) });
+  }
+
+  async addTags(ids: string[], tags: string[]): Promise<void> {
+    const set = new Set(ids);
+    const books = (await this.meta.list()).filter((b) => set.has(b.id));
+    await this.meta.putMany(books.map((b) => ({ ...b, tags: mergeTags(b.tags, tags) })));
+  }
+
+  async removeTag(ids: string[], tag: string): Promise<void> {
+    const set = new Set(ids);
+    const books = (await this.meta.list()).filter((b) => set.has(b.id));
+    await this.meta.putMany(books.map((b) => ({ ...b, tags: b.tags.filter((t) => !sameTag(t, tag)) })));
+  }
+
+  /** Renames a tag on every book (merging if the new name already exists). */
+  async renameTag(from: string, to: string): Promise<void> {
+    const books = (await this.meta.list()).filter((b) => b.tags.some((t) => sameTag(t, from)));
+    await this.meta.putMany(
+      books.map((b) => ({ ...b, tags: mergeTags(b.tags.filter((t) => !sameTag(t, from)), [to]) })),
+    );
   }
 
   async markOpened(id: string): Promise<void> {

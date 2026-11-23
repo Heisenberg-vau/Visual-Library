@@ -17,7 +17,7 @@ export function toast(message: string, kind: "info" | "error" = "info", ms = 350
   }, ms);
 }
 
-function modal(build: (close: (v: unknown) => void) => HTMLElement): Promise<unknown> {
+export function modal(build: (close: (v: unknown) => void) => HTMLElement): Promise<unknown> {
   return new Promise((resolve) => {
     const backdrop = h("div", { class: "modal-backdrop" });
     const close = (v: unknown) => {

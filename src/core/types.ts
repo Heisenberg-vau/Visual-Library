@@ -18,6 +18,18 @@ export interface BookMeta {
   lastPage: number;
   /** Zoom relative to "fit width" (1 = fit width). */
   zoom: number;
+  /** The one shelf the book lives on; null = "Chưa phân loại". */
+  categoryId: string | null;
+  /** Free labels; a book can have many. */
+  tags: string[];
+}
+
+/** A shelf. Shelves nest: "Hàng không" > "Động cơ". */
+export interface Category {
+  id: string;
+  name: string;
+  parentId: string | null;
+  createdAt: number;
 }
 
 export interface OutlineNode {

@@ -247,6 +247,120 @@ test("200 MB file imports and reads smoothly", { skip: !process.env.HEAVY || !ex
   await backToShelf();
 });
 
+async function prompt(text) {
+  await page.waitForSelector(".modal .text-input");
+  await page.fill(".modal .text-input", text);
+  await page.click(".modal .btn-primary");
+}
+const crumbsText = async () => (await page.textContent('[data-testid="crumbs"] .crumb-path')).replace(/\s+/g, " ").trim();
+
+test("milestone 2: create nested shelves", async () => {
+  await page.click('[data-testid="new-shelf"]');
+  await prompt("Hàng không");
+  await page.waitForFunction(() => document.querySelector('[data-testid="crumbs"]').textContent.includes("Hàng không"));
+  await page.click('[data-testid="new-subshelf"]');
+  await prompt("Động cơ");
+  await page.waitForFunction(() => document.querySelector('[data-testid="crumbs"]').textContent.includes("Động cơ"));
+  assert.match(await crumbsText(), /Tất cả\s*Hàng không\s*Động cơ/);
+  await page.click('.crumb:has-text("Hàng không")');
+  await page.click('[data-testid="new-subshelf"]');
+  await prompt("Khí động");
+  await page.click('.crumb:has-text("Hàng không")');
+  // duplicate sibling name is refused with a message
+  await page.click('[data-testid="new-subshelf"]');
+  await prompt("động CƠ");
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast-error")].some((t) => t.textContent.includes("Đã có")));
+  assert.equal(await page.locator('[data-testid="shelf-tile"]').count(), 2);
+});
+
+test("milestone 2: select several books and move them onto a shelf", async () => {
+  await page.click('[data-testid="view-all"]');
+  await page.click('[data-testid="select-btn"]');
+  await cards().filter({ hasText: "650" }).click();
+  await cards().filter({ hasText: "heavy" }).first().click().catch(() => {});
+  const n = await page.locator(".card.selected").count();
+  assert.ok(n >= 1);
+  await page.click('[data-testid="bulk-move"]');
+  await page.locator('[data-testid="shelf-picker"] .picker-row', { hasText: "Động cơ" }).click();
+  await page.click('[data-testid="shelf-picker"] .btn-primary');
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("Đã chuyển")));
+  // shown under the parent shelf too (counts include sub-shelves)
+  await page.locator('[data-testid="shelf-item"]', { hasText: "Hàng không" }).click();
+  assert.equal(await cards().count(), n);
+  assert.match(await cards().first().textContent(), /Hàng không › Động cơ/);
+  await page.click('[data-testid="view-unsorted"]');
+  assert.equal(await cards().filter({ hasText: "650" }).count(), 0);
+});
+
+test("milestone 2: tags, tag filter and accent-free search", async () => {
+  await page.click('[data-testid="view-all"]');
+  await cards().filter({ hasText: "650" }).locator(".card-more").click();
+  await page.locator(".menu-item", { hasText: "Gắn thẻ" }).click();
+  await page.fill('[data-testid="tag-input"]', "M15");
+  await page.keyboard.press("Enter");
+  await page.fill('[data-testid="tag-input"]', "#Động cơ, ATA 72");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('[data-testid="tag-dialog"] .chip[data-tag="ATA 72"]');
+  await page.click('[data-testid="tag-dialog"] .btn-primary');
+  await page.waitForSelector('.sp-tags .tag-chip[data-tag="M15"]');
+  assert.match(await cards().filter({ hasText: "650" }).textContent(), /#M15.*#Động cơ.*#ATA 72/);
+  await page.click('.sp-tags .tag-chip[data-tag="M15"]');
+  assert.equal(await cards().count(), 1);
+  await page.click('.sp-tags .tag-chip[data-tag="M15"]');
+  await page.fill('[data-testid="search"]', "#dong co");
+  assert.equal(await cards().count(), 1);
+  await page.fill('[data-testid="search"]', "");
+  await shot("08-shelves");
+});
+
+test("milestone 2: importing while on a shelf puts the file there; view survives reload", async () => {
+  await page.locator('[data-testid="shelf-item"]', { hasText: "Khí động" }).click();
+  await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/small.pdf`]);
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /Khí động|đã có/.test(t.textContent)));
+  await page.reload();
+  await page.waitForSelector('[data-testid="crumbs"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="crumbs"]').textContent.includes("Khí động"));
+});
+
+test("milestone 2: deleting a shelf keeps its books", async () => {
+  await page.locator('[data-testid="shelf-item"]', { hasText: "Động cơ" }).click();
+  const before = await cards().count();
+  await page.click('[data-testid="shelf-menu"]');
+  await page.locator(".menu-item", { hasText: "Xóa danh mục" }).click();
+  await page.click(".modal .btn-primary");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="crumbs"]').textContent.includes("Động cơ"));
+  const names = await page.locator('[data-testid="shelf-item"] .sp-label').allTextContents();
+  assert.ok(!names.includes("Động cơ"), `shelves now: ${names.join(", ")}`);
+  assert.ok((await cards().count()) >= before);
+  await page.click('[data-testid="view-all"]');
+});
+
+test("milestone 2: data saved by v0.1.0 still loads", async () => {
+  const ctx = await browser.newContext();
+  const p = await ctx.newPage();
+  await p.goto(URL + "icons/icon.svg");
+  await p.evaluate(() => new Promise((resolve, reject) => {
+    const req = indexedDB.open("visual-library", 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      db.createObjectStore("books", { keyPath: "id" }).createIndex("fingerprint", "fingerprint");
+      db.createObjectStore("covers"); db.createObjectStore("blobs"); db.createObjectStore("settings");
+    };
+    req.onsuccess = () => {
+      const t = req.result.transaction("books", "readwrite");
+      t.objectStore("books").put({ id: "old1", kind: "pdf", title: "Sách từ bản 0.1", fileName: "a.pdf", size: 10, pageCount: 5,
+        fingerprint: "x", addedAt: 1, lastOpenedAt: 2, lastPage: 3, zoom: 1 });
+      t.oncomplete = () => { req.result.close(); resolve(); };
+      t.onerror = () => reject(t.error);
+    };
+  }));
+  await p.goto(URL);
+  await p.waitForSelector('[data-testid="book-card"]');
+  assert.match(await p.textContent('[data-testid="book-card"]'), /Sách từ bản 0\.1/);
+  assert.match(await p.textContent('[data-testid="view-unsorted"]'), /1/);
+  await ctx.close();
+});
+
 test("deletes a book from the shelf", async () => {
   const n = await cards().count();
   await cards().filter({ hasText: "3 pages" }).locator(".card-more").click();
