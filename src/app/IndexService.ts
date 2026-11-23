@@ -16,6 +16,7 @@ export class IndexService {
   private current: { id: string; ctrl: AbortController } | null = null;
   private listeners = new Set<(bookId: string) => void>();
   private kicking = false;
+  private pausedFlag = readPaused();
 
   constructor(
     private readonly library: LibraryService,
@@ -40,11 +41,30 @@ export class IndexService {
       const b = await this.library.get(bookId);
       if (!b || b.kind !== "pdf") return null;
       ix = new TextIndexer(bookId, b.pageCount, this.store);
+      ix.isPaused = () => this.pausedFlag;
       ix.onStatus(() => this.listeners.forEach((fn) => fn(bookId)));
       this.indexers.set(bookId, ix);
     }
     await ix.load();
     return ix;
+  }
+
+  get paused(): boolean {
+    return this.pausedFlag;
+  }
+
+  /** Pauses or resumes background OCR for every book (remembered across restarts). */
+  setPaused(paused: boolean): void {
+    if (paused === this.pausedFlag) return;
+    this.pausedFlag = paused;
+    try {
+      localStorage.setItem(PAUSE_KEY, paused ? "1" : "0");
+    } catch {
+      /* private mode: just for this session */
+    }
+    if (paused) this.current?.ctrl.abort();
+    else this.kick();
+    for (const ix of this.indexers.values()) ix.emit();
   }
 
   statusOf(bookId: string) {
@@ -99,9 +119,12 @@ export class IndexService {
   }
 
   private async loop(): Promise<void> {
-    while (!this.current && this.queue.length) {
+    while (!this.current) {
       if (document.visibilityState === "hidden") return; // resumes on visibility
-      const id = this.queue.shift()!;
+      // While OCR is paused, books whose own text is read just wait.
+      const id = this.queue.find((q) => !(this.pausedFlag && this.indexers.get(q)?.textDone));
+      if (!id) return;
+      this.queue = this.queue.filter((q) => q !== id);
       const ix = await this.get(id);
       if (!ix || ix.complete) {
         if (ix) await this.markDone(ix);
@@ -121,8 +144,8 @@ export class IndexService {
         this.current = null;
       }
       if (ix.complete) await this.markDone(ix);
-      else if (ctrl.signal.aborted && this.indexers.has(id)) {
-        // Paused for another book: continue later.
+      else if (this.indexers.has(id)) {
+        // Paused, or set aside for another book: continue later.
         if (!this.queue.includes(id)) this.queue.push(id);
         ix.queued = true;
         ix.emit();
@@ -134,5 +157,14 @@ export class IndexService {
     ix.queued = false;
     ix.emit();
     await this.library.setIndexDone(ix.bookId, true);
+  }
+}
+
+const PAUSE_KEY = "vl.ocrPaused";
+function readPaused(): boolean {
+  try {
+    return localStorage.getItem(PAUSE_KEY) === "1";
+  } catch {
+    return false;
   }
 }

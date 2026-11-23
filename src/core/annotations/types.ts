@@ -21,6 +21,8 @@ export interface ClipData {
   src?: string;
   /** Text, already wrapped into lines at `fontSize`. */
   lines?: string[];
+  /** The text as written (paragraphs kept), for editing and re-wrapping. */
+  text?: string;
   fontSize?: number;
 }
 

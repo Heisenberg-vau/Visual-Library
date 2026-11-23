@@ -502,19 +502,27 @@ test("milestone 5: create a notebook; it grows when you write on the last page",
   await penStroke(2, [[0.2, 0.15], [0.5, 0.2], [0.7, 0.15]]);
   await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 3");
   await shot("14-notebook");
-  // v0.5.1: insert a page after page 1, then delete it again
+  // v0.9.1: no toolbar buttons; "+" in the gap under a page inserts right there
+  assert.equal(await page.locator('[data-testid="add-page"], [data-testid="del-page"]').count(), 0, "no page buttons in the toolbar");
   await gotoPage(1);
-  await page.click('[data-testid="add-page"]');
+  await page.click('.page-slot[data-page="1"] [data-testid="gap-add"]');
   await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 4");
   assert.equal(await currentPage(), 2);
   assert.equal((await strokesOn(2)).length, 0, "new page is blank");
   assert.equal((await strokesOn(3)).length, 1, "old page 2 moved to page 3");
-  await page.click('[data-testid="del-page"]'); // blank: deleted without asking
+  // Trash in the page's corner: that page is outlined in red while asking.
+  await page.click('.page-slot[data-page="2"] [data-testid="page-del"]');
+  await page.waitForSelector('.page-slot[data-page="2"].deleting');
+  assert.equal(await page.locator(".page-slot.deleting").count(), 1, "only the chosen page is marked");
+  assert.match(await page.textContent(".modal"), /Xóa trang 2\?/);
+  await shot("29-delete-page");
+  await page.locator(".modal .btn", { hasText: "Xóa trang" }).click();
   await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 3");
+  assert.equal(await page.locator(".page-slot.deleting").count(), 0);
   assert.equal((await strokesOn(2)).length, 1);
-  // deleting a written page asks first; cancel keeps it
+  // cancel keeps a written page
   await gotoPage(2);
-  await page.click('[data-testid="del-page"]');
+  await page.click('.page-slot[data-page="2"] [data-testid="page-del"]');
   await page.locator(".modal .btn", { hasText: "Hủy" }).click();
   assert.equal(await page.textContent('[data-testid="page-total"]'), "/ 3");
   await backToShelf();
@@ -872,6 +880,28 @@ test("milestone 7: scanned pages are OCR'd in the background, then searchable an
   await backToShelf();
 });
 
+test("v0.9.1: pause OCR from the book card, resume later", async () => {
+  await page.evaluate(() => window.__app.index.setPaused(true));
+  await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/scan-pause.pdf`]);
+  const card = () => cards().filter({ hasText: "scan-pause" });
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("scan-pause") && /tạm dừng OCR \(0\/1\)/.test(c.textContent)), null, { timeout: 30000 });
+  await page.waitForTimeout(2500);
+  assert.match(await card().locator('[data-testid="ocr-status"]').textContent(), /Đã tạm dừng OCR \(0\/1\)/, "nothing OCR'd while paused");
+  assert.equal(await page.evaluate(() => localStorage.getItem("vl.ocrPaused")), "1", "remembered");
+  await shot("31-ocr-paused");
+  await card().locator('[data-testid="card-ocr-toggle"]').click();
+  assert.equal(await page.locator('[data-testid="scroller"]').count(), 0, "the button does not open the book");
+  await page.waitForFunction(() => { const c = [...document.querySelectorAll('[data-testid="book-card"]')].find((x) => x.textContent.includes("scan-pause")); return c && c.querySelector('[data-testid="ocr-status"]').hidden; }, null, { timeout: 120000 });
+  // The reader's search panel has the same switch.
+  await page.evaluate(() => window.__app.index.setPaused(true));
+  await openBook("650");
+  await openSearch();
+  assert.equal(await page.isVisible('[data-testid="ocr-toggle"]'), false, "nothing left to OCR in this book");
+  await page.evaluate(() => window.__app.index.setPaused(false));
+  await page.click(".tb-panel");
+  await backToShelf();
+});
+
 // ---- milestone 8: Word documents ----
 
 test("milestone 8: a .docx is laid out into pages, searchable without OCR, and exports", async () => {
@@ -1018,6 +1048,45 @@ test("clip: a picture of the page, moved with the pen, undo, tap to go back", as
   await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: slot.x + (txt.rects[0] + 20) * s, y: slot.y + (txt.rects[1] + 6) * s }] });
   await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await page.waitForFunction(() => window.__reader.scrollerForTests.currentPage === 40, null, { timeout: 5000 });
+  await backToShelf();
+});
+
+test("clip: resize with the corner handle, edit text with a pen tap", async () => {
+  await openBook("650");
+  await page.waitForFunction(() => !!window.__reader.notebookPaneForTests);
+  await page.waitForSelector(`${NB} .page-slot[data-page="2"]`);
+  await page.evaluate(() => window.__reader.notebookPaneForTests.scroller.goToPage(2));
+  await tool("clip");
+  await page.waitForSelector(`${NB} .page-slot[data-page="2"] .ink-clip .clip-handle`, { state: "visible" });
+  const img = (await nbClips(2)).find((c) => c.kind === "image");
+  const [x, y, w, h] = img.rects;
+  const W = 595, H = 842;
+  // Drag the bottom-right handle inwards: half the size, same shape.
+  await penStroke(2, [[(x + w) / W, (y + h) / H], [(x + w * 0.5) / W, (y + h * 0.5) / H]], { root: NB });
+  const small = (await nbClips(2)).find((c) => c.kind === "image").rects;
+  assert.ok(Math.abs(small[2] / w - 0.5) < 0.06, `half as wide (${small[2]} vs ${w})`);
+  assert.ok(Math.abs(small[2] / small[3] - w / h) < 0.02, "keeps its shape");
+  assert.deepEqual(small.slice(0, 2), [x, y], "top-left stays put");
+  // Text grows: font size follows.
+  const txt = (await nbClips(2)).find((c) => c.kind === "text");
+  const [tx, ty, tw, th] = txt.rects;
+  await penStroke(2, [[(tx + tw) / W, (ty + th) / H], [(tx + tw * 0.8) / W, (ty + th * 0.8) / H]], { root: NB });
+  const fs = await page.evaluate(() => window.__reader.notebookPaneForTests.inkModel.strokes(1).find((s) => s.clip?.kind === "text").clip.fontSize);
+  assert.ok(fs < 10 && fs > 8, `font scaled down (${fs})`);
+  await page.click('[data-testid="undo"]');
+  // A pen tap on the text opens the editor.
+  await penStroke(2, [[(tx + 40) / W, (ty + 8) / H], [(tx + 40) / W, (ty + 8) / H]], { root: NB });
+  await page.waitForSelector('[data-testid="clip-edit"]');
+  assert.match(await page.inputValue('[data-testid="clip-edit"]'), /^Line 1 of page 40/);
+  await page.fill('[data-testid="clip-edit"]', "Ý chính: buồng đốt cần trộn đều nhiên liệu.\nGhi chú thêm của mình.");
+  await page.click('[data-testid="clip-edit-save"]');
+  await page.waitForFunction(() => window.__reader.notebookPaneForTests.inkModel.strokes(1).find((s) => s.clip?.kind === "text").clip.text.startsWith("Ý chính"));
+  const edited = (await nbClips(2)).find((c) => c.kind === "text");
+  assert.deepEqual(edited.lines, ["Ý chính: buồng đốt cần trộn đều nhiên liệu.", "Ghi chú thêm của mình."]);
+  assert.ok(edited.rects[3] < th, "box shrinks to the shorter text");
+  await page.waitForSelector(`${NB} .page-slot[data-page="2"] .ink-clip text`);
+  await shot("30-clip-edited");
+  await tool("pen");
   await backToShelf();
 });
 

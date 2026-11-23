@@ -88,7 +88,7 @@ export async function buildExportJobs(
  * no Vietnamese letters, and the picture matches the screen exactly.
  */
 export async function rasterizeTextClips(jobs: PageJob[]): Promise<PageJob[]> {
-  const { CLIP_BAR, CLIP_BAR_COLOR, CLIP_FONT, CLIP_FONT_FAMILY, CLIP_LINE, CLIP_PAD } = await import("../notebook/clips");
+  const { CLIP_BAR, CLIP_BAR_COLOR, CLIP_FONT, CLIP_FONT_FAMILY, CLIP_LINE, clipPad } = await import("../notebook/clips");
   const K = 4; // pixels per point (~290 dpi)
   return jobs.map((job) => {
     if (!job.strokes.some((s) => s.tool === "clip" && s.clip?.kind === "text")) return job;
@@ -102,10 +102,10 @@ export async function rasterizeTextClips(jobs: PageJob[]): Promise<PageJob[]> {
       const ctx = c.getContext("2d")!;
       ctx.scale(K, K);
       ctx.fillStyle = CLIP_BAR_COLOR;
-      ctx.fillRect(0, 0, CLIP_BAR, h);
+      ctx.fillRect(0, 0, (CLIP_BAR * fs) / CLIP_FONT, h);
       ctx.fillStyle = s.color;
       ctx.font = `${fs}px ${CLIP_FONT_FAMILY}`;
-      (s.clip.lines ?? []).forEach((line, i) => ctx.fillText(line, CLIP_PAD, fs * (0.95 + i * CLIP_LINE)));
+      (s.clip.lines ?? []).forEach((line, i) => ctx.fillText(line, clipPad(fs), fs * (0.95 + i * CLIP_LINE)));
       const src = c.toDataURL("image/png");
       c.width = 0;
       return { ...s, clip: { ...s.clip, src } };

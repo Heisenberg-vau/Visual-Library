@@ -672,3 +672,21 @@ body[data-tone="dark"] .reader-body { background: #2b2d31; }
 .seg-btn.active { background: #1f3a5f; color: #fff; }
 .clip-hint { font-size: 13px; color: #5b6576; }
 .btn.small { min-height: 36px; padding: 0 12px; font-size: 14px; }
+
+/* Notebook page actions on the pages themselves */
+.page-deco { position: absolute; z-index: 3; border: 1px solid #c9d3e3; background: #fff; color: #1f5fbf; display: grid; place-items: center; cursor: pointer; padding: 0; touch-action: manipulation; }
+.gap-add { left: 50%; bottom: -20px; transform: translate(-50%, 50%); width: 34px; height: 34px; border-radius: 50%; opacity: 0.7; box-shadow: 0 1px 4px rgb(0 0 0 / 0.12); }
+.gap-add:hover, .gap-add:focus-visible { opacity: 1; background: #eef4fd; }
+.gap-add::before { content: ""; position: absolute; inset: -10px; } /* bigger target than it looks */
+.page-del { top: 8px; right: 8px; width: 36px; height: 36px; border-radius: 10px; color: #7a8496; opacity: 0.45; border-color: transparent; background: rgb(255 255 255 / 0.8); }
+.page-del:hover, .page-del:focus-visible { opacity: 1; color: var(--danger); border-color: #f1c7c3; }
+.page-slot.deleting { outline: 3px solid var(--danger); outline-offset: 2px; }
+.page-slot.deleting::after { content: ""; position: absolute; inset: 0; background: rgb(208 58 47 / 0.08); pointer-events: none; z-index: 4; }
+.page-slot.deleting .page-del { opacity: 1; color: var(--danger); }
+.ink-clip .clip-frame, .ink-clip .clip-handle { display: none; }
+.reader.tool-clip .ink-clip .clip-frame { display: inline; stroke: #1f5fbf; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; opacity: 0.6; }
+.reader.tool-clip .ink-clip .clip-handle { display: inline; fill: #fff; stroke: #1f5fbf; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.clip-edit { width: 100%; min-height: 160px; font: inherit; line-height: 1.45; resize: vertical; }
+.index-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ocr-status { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ocr-card-toggle { border: 1px solid #e8c79c; background: #fff; color: #9a5a12; border-radius: 8px; font: inherit; font-size: 12px; padding: 4px 10px; min-height: 30px; cursor: pointer; }

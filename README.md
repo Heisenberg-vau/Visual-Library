@@ -17,6 +17,7 @@ App đọc và ghi chú tài liệu cho Xiaomi Pad 8 Pro + Focus Pen Pro. Đây 
 | 7 | Tìm kiếm chữ, sửa bảng mã font, OCR chạy ngầm (v0.7.1: OCR ngay khi nhập, mọi trang không bình thường) | ✅ v0.7.1 |
 | 8 | Mở file Word .docx (giữ file gốc, dàn trang, tìm được chữ, viết/xuất như PDF) | ✅ v0.8.0 |
 | 9 | Cắt chữ/hình từ sách kéo sang vở (di chuyển, hoàn tác, chạm để về trang gốc, xuất PDF) | ✅ v0.9.0 |
+| 9.1 | Thêm/xóa trang vở ngay trên trang (dấu ＋ giữa các trang, thùng rác ở góc), phóng to/thu nhỏ và sửa chữ khối đã dán, tạm dừng OCR | ✅ v0.9.1 |
 | Bản 2 | Giao diện thư viện / kệ / bàn học | |
 
 ## Cài lên Pad
@@ -35,3 +36,14 @@ npm run build && npm run fixtures && npm run test:e2e   # kiểm thử end-to-en
 ```
 
 Kiến trúc và quy ước: xem [ARCHITECTURE.md](ARCHITECTURE.md). Mỗi lần đẩy lên `main`, GitHub Actions chạy toàn bộ kiểm thử; chỉ khi pass hết mới đăng bản mới. Mỗi mốc được gắn tag (`v0.1.0`, ...) để quay lại khi cần.
+
+## Cần quan tâm (chưa test / để sau)
+
+- **File Word (.docx)** – chưa được test với file thật (người dùng chưa có file). Khi có file: kiểm tra dàn trang, font thay thế trên máy tính bảng, bảng/hình, đầu trang – chân trang – số trang (chưa hiển thị).
+
+## Giai đoạn tiếp theo (theo thứ tự)
+
+1. Chức năng và trải nghiệm người dùng cho chắc (đang làm).
+2. Giao diện UI/UX, front-end (thư viện/kệ/bàn học).
+3. Quản lý tài nguyên (bộ nhớ vượt 2 GB cho người đọc nhiều sách).
+4. Bảo mật (tài liệu của hãng hàng không phải được bảo vệ).

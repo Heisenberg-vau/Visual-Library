@@ -97,11 +97,11 @@ async function heavyBook(file, targetMB = 200) {
 }
 
 /** A "scanned" book: each page is only an image of printed text (no text layer). */
-async function scannedBook(file) {
+async function scannedBook(file, texts0) {
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome", args: ["--no-sandbox"] });
   const page = await browser.newPage({ viewport: { width: 1240, height: 1754 } });
-  const texts = [
+  const texts = texts0 ?? [
     ["Chapter 7 Combustion", "The combustion chamber must burn a large quantity of fuel supplied through the burners.", "Flame tube cooling air enters through holes in the liner wall."],
     ["Chapter 8 Turbine", "The turbine extracts energy from the hot gas stream to drive the compressor.", "Nozzle guide vanes direct the gas onto the turbine blades."],
   ];
@@ -217,6 +217,7 @@ async function wordDoc(file) {
 
 await textBook(3, `${OUT}/small.pdf`);
 await scannedBook(`${OUT}/scanned.pdf`);
+await scannedBook(`${OUT}/scan-pause.pdf`, [["Chapter 9 Bearings", "Ball and roller bearings support the main shafts of the engine."]]);
 await garbledBook(`${OUT}/garbled.pdf`);
 await textBook(650, `${OUT}/book-650.pdf`, { landscapeAt: [300] });
 await wordDoc(`${OUT}/bao-cao.docx`);

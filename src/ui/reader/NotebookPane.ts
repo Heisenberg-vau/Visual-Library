@@ -3,10 +3,11 @@ import type { PageLink } from "../../core/annotations/types";
 import type { NotebookDocument } from "../../core/notebook/NotebookDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
-import { CLIP_FONT, CLIP_FONT_FAMILY, CLIP_PAD, makeClipStroke, placeOnPage, textClipSize, wrapLines } from "../../core/notebook/clips";
+import { CLIP_FONT, CLIP_FONT_FAMILY, CLIP_PAD, clipText, makeClipStroke, placeOnPage, rewrappedClip, textClipSize, wrapLines } from "../../core/notebook/clips";
+import type { Stroke } from "../../core/annotations/types";
 import type { ClipPayload } from "./ClipCard";
 import { h, icon, iconButton } from "../dom";
-import { confirmDialog, toast } from "../feedback";
+import { confirmDialog, modal, toast } from "../feedback";
 import { InkLayer, type ToolState } from "./InkLayer";
 import { PageScroller } from "./PageScroller";
 
@@ -42,25 +43,73 @@ export function insertPageAfter(doc: NotebookDocument, ink: InkModel, current: n
   return current + 1;
 }
 
-/** Deletes 1-based page `current` (asks first if it has writing). Returns true if deleted. */
-export async function deletePageAsk(doc: NotebookDocument, ink: InkModel, current: number): Promise<boolean> {
+/** Deletes 1-based page `current` after asking (the page is marked meanwhile). */
+export async function deletePageAsk(doc: NotebookDocument, ink: InkModel, current: number, slot?: HTMLElement): Promise<boolean> {
   if (doc.numPages <= 1) {
     toast("Vở cần ít nhất 1 trang.");
     return false;
   }
-  if (ink.strokes(current - 1).length) {
-    const ok = await confirmDialog(
-      `Xóa trang ${current}?`,
-      "Trang này có ghi chép. Xóa trang sẽ xóa luôn ghi chép trên đó và không hoàn tác được.",
-      "Xóa trang",
-      true,
-    );
-    if (!ok) return false;
-  }
+  slot?.classList.add("deleting");
+  const written = ink.strokes(current - 1).length > 0;
+  const ok = await confirmDialog(
+    `Xóa trang ${current}?`,
+    written
+      ? "Trang đang viền đỏ có ghi chép. Xóa trang sẽ xóa luôn ghi chép trên đó và không hoàn tác được."
+      : "Trang trắng đang viền đỏ sẽ bị xóa.",
+    "Xóa trang",
+    true,
+  );
+  slot?.classList.remove("deleting");
+  if (!ok) return false;
   doc.removePage();
   ink.deletePage(current - 1);
   toast(`Đã xóa trang ${current}.`);
   return true;
+}
+
+/** Space between notebook pages: room for the "+" button. */
+export const NOTEBOOK_GAP = 40;
+
+/**
+ * Page actions drawn on the pages themselves: a "+" in the gap under every
+ * page inserts a blank page right there, and a trash icon in the corner
+ * deletes that page (after marking it and asking).
+ */
+export function notebookPageDecor(doc: NotebookDocument, ink: InkModel, changed: (n: number) => void, goTo: (page: number) => void): (index: number, el: HTMLElement) => void {
+  return (index, el) => {
+    const add = h("button", {
+      class: "page-deco gap-add",
+      type: "button",
+      "data-testid": "gap-add",
+      title: `Chèn trang trắng sau trang ${index + 1}`,
+      "aria-label": `Chèn trang trắng sau trang ${index + 1}`,
+      html: icon("plus", 20),
+    });
+    add.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const p = insertPageAfter(doc, ink, index + 1);
+      changed(doc.numPages);
+      goTo(p);
+      toast(`Đã chèn trang ${p}.`);
+    });
+    const del = h("button", {
+      class: "page-deco page-del",
+      type: "button",
+      "data-testid": "page-del",
+      title: `Xóa trang ${index + 1}`,
+      "aria-label": `Xóa trang ${index + 1}`,
+      html: icon("trash", 18),
+    });
+    del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const page = index + 1;
+      if (await deletePageAsk(doc, ink, page, el)) {
+        changed(doc.numPages);
+        goTo(Math.min(page, doc.numPages));
+      }
+    });
+    el.append(add, del);
+  };
 }
 
 /** The exercise book shown beside a book in split view. */
@@ -80,6 +129,8 @@ export class NotebookPane {
     this.scroller = new PageScroller(doc, this.scheduler, {
       initialPage: Math.min(meta.lastPage, doc.numPages),
       initialZoom: meta.zoom,
+      gap: NOTEBOOK_GAP,
+      decorate: notebookPageDecor(doc, deps.ink, (n) => this.grown(n), (p) => this.scroller.goToPage(p)),
       onPageChange: () => {
         this.updateLabel();
         this.queueSave();
@@ -92,6 +143,7 @@ export class NotebookPane {
       linkToPlace: () => this.armedLink,
       onLinkPlaced: () => this.setArmed(null),
       onLinkTap: deps.onLinkTap,
+      onClipTap: (page, clip) => void editTextClip(deps.ink, page, clip),
     });
     this.unsubGrow = autoExtend(doc, deps.ink, (n) => this.grown(n));
 
@@ -108,20 +160,6 @@ export class NotebookPane {
       const link = deps.currentBookLink();
       if (link) this.setArmed(link);
     });
-    const addBtn = iconButton("addPage", "Chèn trang trắng sau trang này", () => {
-      const p = insertPageAfter(doc, deps.ink, this.scroller.currentPage);
-      this.grown(doc.numPages);
-      this.scroller.goToPage(p);
-    });
-    addBtn.dataset.testid = "nb-add-page";
-    const delBtn = iconButton("trash", "Xóa trang này", async () => {
-      const cur = this.scroller.currentPage;
-      if (await deletePageAsk(doc, deps.ink, cur)) {
-        this.grown(doc.numPages);
-        this.scroller.goToPage(Math.min(cur, doc.numPages));
-      }
-    });
-    delBtn.dataset.testid = "nb-del-page";
     const closeBtn = iconButton("close", "Đóng vở", () => deps.onClose());
     closeBtn.dataset.testid = "nb-close";
 
@@ -135,8 +173,6 @@ export class NotebookPane {
         h("span", { class: "nb-title", title: meta.title }, meta.title),
         this.pageLabel,
         this.linkBtn,
-        addBtn,
-        delBtn,
         closeBtn,
       ),
       this.scroller.el,
@@ -166,10 +202,20 @@ export class NotebookPane {
       const sz = textClipSize(lines, w);
       const [x, y] = placeOnPage(at.x - 8, at.y - 8, sz.w, sz.h, size.width, size.height);
       rect = [x, y, sz.w, sz.h];
-      stroke = makeClipStroke(id, rect, { kind: "text", lines, fontSize: CLIP_FONT }, p.link);
+      stroke = makeClipStroke(id, rect, { kind: "text", lines, text: p.text, fontSize: CLIP_FONT }, p.link);
     }
     this.deps.onActivity();
     this.deps.ink.add(at.page, stroke);
+    // The tip only for the first few pastes.
+    try {
+      const n = Number(localStorage.getItem("vl.clipTips") || 0);
+      if (n < 3) {
+        localStorage.setItem("vl.clipTips", String(n + 1));
+        toast("Mẹo: với công cụ cây kéo, kéo khối để di chuyển, kéo ô vuông ở góc để phóng to/thu nhỏ, chạm vào khối chữ để sửa.", "info", 6000);
+      }
+    } catch {
+      /* storage unavailable: skip the tip */
+    }
     return true;
   }
 
@@ -229,4 +275,33 @@ export function measureText(t: string): number {
   measureCtx ??= document.createElement("canvas").getContext("2d")!;
   measureCtx.font = `${CLIP_FONT}px ${CLIP_FONT_FAMILY}`;
   return measureCtx.measureText(t).width;
+}
+
+/** Pen tap on a pasted text block (clip tool): edit its text. */
+export async function editTextClip(ink: InkModel, page: number, s: Stroke): Promise<void> {
+  if (s.clip?.kind !== "text") return;
+  const result = await modal((close) => {
+    const area = h("textarea", { class: "text-input clip-edit", rows: 8, "data-testid": "clip-edit" }) as HTMLTextAreaElement;
+    area.value = clipText(s);
+    const save = h("button", { class: "btn btn-primary", type: "button", "data-testid": "clip-edit-save" }, "Lưu");
+    save.addEventListener("click", () => close(area.value));
+    queueMicrotask(() => area.focus());
+    return h(
+      "div",
+      { class: "modal modal-wide", role: "dialog", "aria-modal": "true" },
+      h("h2", {}, "Sửa chữ đã dán"),
+      h("p", { class: "muted small" }, "Xuống dòng để tách đoạn. Khối chữ giữ nguyên bề rộng và cỡ chữ."),
+      area,
+      h("div", { class: "modal-actions" }, h("button", { class: "btn", type: "button", onclick: () => close(null) }, "Hủy"), save),
+    );
+  });
+  if (typeof result !== "string") return;
+  const text = result.trim();
+  if (!text) {
+    ink.remove(page, [s.id]);
+    toast("Đã xóa khối chữ trống.");
+    return;
+  }
+  if (text === clipText(s).trim()) return;
+  ink.replace(page, s, rewrappedClip(s, text, measureText));
 }

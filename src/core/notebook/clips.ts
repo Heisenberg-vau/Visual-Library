@@ -128,3 +128,33 @@ export function clipAt(strokes: readonly Stroke[], x: number, y: number): Stroke
 export function placeOnPage(x: number, y: number, w: number, h: number, pageW: number, pageH: number): [number, number] {
   return [Math.max(0, Math.min(x, pageW - w)), Math.max(0, Math.min(y, pageH - h))];
 }
+
+/** Padding before text scales with the font, so a resized clip looks the same. */
+export function clipPad(fontSize = CLIP_FONT): number {
+  return (CLIP_PAD * fontSize) / CLIP_FONT;
+}
+
+/** Size of the resize handle at a clip's bottom-right corner, in points at zoom 1. */
+export const CLIP_HANDLE = 12;
+
+/** The clip scaled by k from its top-left corner (text: the font grows too). */
+export function scaledClip(s: Stroke, k: number): Stroke {
+  const [x, y, w, h] = s.rects!;
+  const clip = s.clip!.kind === "text" ? { ...s.clip!, fontSize: r1((s.clip!.fontSize ?? CLIP_FONT) * k * 100) / 100 } : s.clip!;
+  return { ...s, rects: [x, y, r1(w * k), r1(h * k)], clip };
+}
+
+/** Text of a clip for editing (older clips only kept the wrapped lines). */
+export function clipText(s: Stroke): string {
+  return s.clip?.text ?? (s.clip?.lines ?? []).join(" ");
+}
+
+/** The clip with new text, re-wrapped to its width at its font size. */
+export function rewrappedClip(s: Stroke, text: string, measureAt11: (t: string) => number): Stroke {
+  const fs = s.clip?.fontSize ?? CLIP_FONT;
+  const [x, y, w] = s.rects!;
+  const k = fs / CLIP_FONT;
+  const lines = wrapLines(text, w - clipPad(fs) - 2 * k, (t) => measureAt11(t) * k);
+  const size = textClipSize(lines, w, fs);
+  return { ...s, rects: [x, y, w, size.h], clip: { ...s.clip!, kind: "text", text, lines } };
+}

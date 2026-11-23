@@ -42,6 +42,10 @@ export interface PageScrollerOptions {
   margins?: Margins;
   onPageChange: (page: number) => void;
   onZoomChange: (zoom: number) => void;
+  /** Space between pages in CSS px (notebooks use more, for the "+" button). */
+  gap?: number;
+  /** Adds controls to a page slot when it is created (e.g. notebook page actions). */
+  decorate?: (index: number, el: HTMLElement) => void;
 }
 
 /** Stylus contacts must never scroll or pinch (they write). */
@@ -79,12 +83,15 @@ export class PageScroller {
   private margins: Margins;
   hooks: SlotHooks | null = null;
 
+  private readonly gap: number;
+
   constructor(
     private readonly doc: PagedDocument,
     private readonly scheduler: JobScheduler,
     private readonly opts: PageScrollerOptions,
   ) {
     this.zoom = clamp(opts.initialZoom || 1, MIN_ZOOM, MAX_ZOOM);
+    this.gap = opts.gap ?? GAP;
     this.margins = opts.margins ?? { left: 0, right: 0 };
     this.content = h("div", { class: "pages-content" });
     this.el = h("div", { class: "pages-scroller", "data-testid": "scroller", tabindex: 0 }, this.content);
@@ -155,7 +162,7 @@ export class PageScroller {
     });
     this.layout = new PageLayout(
       sizes,
-      { gap: GAP, availableWidth: this.el.clientWidth - 2 * GAP, zoom: this.zoom },
+      { gap: this.gap, availableWidth: this.el.clientWidth - 2 * GAP, zoom: this.zoom },
       this.el.clientWidth,
     );
     this.content.style.width = `${this.layout.contentWidth}px`;
@@ -195,7 +202,7 @@ export class PageScroller {
 
   goToPage(n: number, smooth = false): void {
     const i = clamp(Math.round(n), 1, this.doc.numPages) - 1;
-    const top = this.layout.tops[i] - GAP / 2;
+    const top = this.layout.tops[i] - this.gap / 2;
     const left = (this.layout.contentWidth - this.el.clientWidth) / 2;
     this.el.scrollTo({ top, left: Math.max(0, left), behavior: smooth ? "smooth" : "auto" });
     this.setPage(i + 1);
@@ -257,6 +264,7 @@ export class PageScroller {
     const s: Slot = { index, el, paper, canvas: null, renderedScale: 0 };
     this.positionSlot(s);
     this.content.append(el);
+    this.opts.decorate?.(index, el);
     this.hooks?.attach(index, el, this.frame(index));
     return s;
   }

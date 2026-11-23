@@ -6,6 +6,8 @@ export class SearchPanel {
   readonly el: HTMLElement;
   private input: HTMLInputElement;
   private statusEl: HTMLElement;
+  private statusText: HTMLElement;
+  private pauseBtn: HTMLButtonElement;
   private results: HTMLElement;
   private lastQuery = "";
   private unsub: () => void;
@@ -13,6 +15,7 @@ export class SearchPanel {
   constructor(
     private readonly indexer: TextIndexer,
     private readonly onJump: (page: number, rects: number[]) => void,
+    private readonly pause?: { get: () => boolean; set: (paused: boolean) => void },
   ) {
     this.input = h("input", {
       class: "search-input",
@@ -24,7 +27,10 @@ export class SearchPanel {
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.run();
     });
-    this.statusEl = h("div", { class: "index-status small muted", "data-testid": "index-status" });
+    this.statusText = h("span", { "data-testid": "index-status" });
+    this.pauseBtn = h("button", { class: "btn btn-ghost small ocr-toggle", type: "button", "data-testid": "ocr-toggle", hidden: true });
+    this.pauseBtn.addEventListener("click", () => this.pause?.set(!this.pause.get()));
+    this.statusEl = h("div", { class: "index-status small muted" }, this.statusText, this.pauseBtn);
     this.results = h("div", { class: "search-results", "data-testid": "search-results" });
     this.el = h(
       "div",
@@ -54,11 +60,16 @@ export class SearchPanel {
     if (s.ocrTotal > 0) {
       parts.push(
         s.ocrDone < s.ocrTotal
-          ? `Đang quét OCR: ${s.ocrDone}/${s.ocrTotal} trang${s.running ? "" : " (đang chờ)"} – kết quả tìm kiếm sẽ thêm dần`
+          ? s.paused
+            ? `Đã tạm dừng OCR: ${s.ocrDone}/${s.ocrTotal} trang`
+            : `Đang quét OCR: ${s.ocrDone}/${s.ocrTotal} trang${s.running ? "" : " (đang chờ)"} – kết quả tìm kiếm sẽ thêm dần`
           : `Đã OCR ${s.ocrDone} trang`,
       );
     }
-    this.statusEl.textContent = parts.join(" · ") || `Đã sẵn sàng tìm trong ${s.total} trang`;
+    this.statusText.textContent = parts.join(" · ") || `Đã sẵn sàng tìm trong ${s.total} trang`;
+    const unfinished = s.scanned < s.total || s.ocrDone < s.ocrTotal;
+    this.pauseBtn.hidden = !this.pause || !unfinished;
+    this.pauseBtn.textContent = s.paused ? "Tiếp tục OCR" : "Tạm dừng OCR";
   }
 
   private run(): void {

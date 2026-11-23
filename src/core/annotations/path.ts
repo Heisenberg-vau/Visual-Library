@@ -1,5 +1,5 @@
 import { LINK_FONT } from "../notebook/links";
-import { CLIP_BAR, CLIP_BAR_COLOR, CLIP_FONT, CLIP_FONT_FAMILY, CLIP_LINE, CLIP_PAD } from "../notebook/clips";
+import { CLIP_BAR, CLIP_BAR_COLOR, CLIP_FONT, CLIP_FONT_FAMILY, CLIP_HANDLE, CLIP_LINE, clipPad } from "../notebook/clips";
 
 /** Arrow icon of a link tag, relative to the tag box. */
 export function linkArrow(x: number, y: number, h: number): number[] {
@@ -82,19 +82,24 @@ function clipSvg(s: Stroke, color: string): string {
   if (!s.rects || !s.clip) return "";
   const [x, y, w, h] = s.rects;
   const id = xmlEscape(s.id);
+  // Frame and resize handle: only shown while the clip tool is on (CSS).
+  const hs = CLIP_HANDLE;
+  const tools =
+    `<rect class="clip-frame" x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" fill="none"/>` +
+    `<rect class="clip-handle" x="${f(x + w - hs / 2)}" y="${f(y + h - hs / 2)}" width="${f(hs)}" height="${f(hs)}" rx="2.5"/>`;
   if (s.clip.kind === "image" && s.clip.src && /^data:image\/(png|jpeg);base64,/.test(s.clip.src)) {
-    return `<g class="ink-clip" data-id="${id}"><image href="${s.clip.src}" x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" preserveAspectRatio="none"/></g>`;
+    return `<g class="ink-clip" data-id="${id}"><image href="${s.clip.src}" x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" preserveAspectRatio="none"/>${tools}</g>`;
   }
   const fs = s.clip.fontSize ?? CLIP_FONT;
   const lines = s.clip.lines ?? [];
   let t = "";
   lines.forEach((line, i) => {
-    t += `<tspan x="${f(x + CLIP_PAD)}" y="${f(y + fs * (0.95 + i * CLIP_LINE))}">${xmlEscape(line)}</tspan>`;
+    t += `<tspan x="${f(x + clipPad(fs))}" y="${f(y + fs * (0.95 + i * CLIP_LINE))}">${xmlEscape(line)}</tspan>`;
   });
   return (
     `<g class="ink-clip" data-id="${id}">` +
-    `<rect x="${f(x)}" y="${f(y)}" width="${f(CLIP_BAR)}" height="${f(h)}" fill="${CLIP_BAR_COLOR}"/>` +
+    `<rect x="${f(x)}" y="${f(y)}" width="${f((CLIP_BAR * fs) / CLIP_FONT)}" height="${f(h)}" fill="${CLIP_BAR_COLOR}"/>` +
     `<text font-size="${f(fs)}" font-family="${CLIP_FONT_FAMILY.replace(/"/g, "'")}" fill="${color}" xml:space="preserve">${t}</text>` +
-    `<rect class="clip-box" x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" fill="transparent"/></g>`
+    `<rect class="clip-box" x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" fill="transparent"/>${tools}</g>`
   );
 }

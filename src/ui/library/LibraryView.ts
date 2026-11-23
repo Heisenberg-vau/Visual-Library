@@ -467,7 +467,17 @@ export class LibraryView {
       return;
     }
     el.hidden = false;
-    el.textContent = s.running ? `Đang quét OCR ${s.ocrDone}/${s.ocrTotal} trang` : `Chờ quét OCR (${s.ocrDone}/${s.ocrTotal})`;
+    const label = s.paused
+      ? `Đã tạm dừng OCR (${s.ocrDone}/${s.ocrTotal})`
+      : s.running
+        ? `Đang quét OCR ${s.ocrDone}/${s.ocrTotal} trang`
+        : `Chờ quét OCR (${s.ocrDone}/${s.ocrTotal})`;
+    const btn = h("button", { class: "ocr-card-toggle", type: "button", "data-testid": "card-ocr-toggle" }, s.paused ? "Tiếp tục" : "Tạm dừng");
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation(); // don't open the book
+      this.deps.index.setPaused(!this.deps.index.paused);
+    });
+    el.replaceChildren(h("span", {}, label), btn);
   }
 
   private async loadCover(id: string, el: HTMLElement): Promise<void> {

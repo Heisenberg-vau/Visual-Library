@@ -18,7 +18,7 @@ import { h, icon, iconButton } from "../dom";
 import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
 import { InkLayer, type Tool, type ToolState } from "./InkLayer";
-import { NotebookPane, autoExtend, deletePageAsk, insertPageAfter } from "./NotebookPane";
+import { NOTEBOOK_GAP, NotebookPane, autoExtend, editTextClip, notebookPageDecor } from "./NotebookPane";
 import type { Ambience } from "../study/Ambience";
 import type { StudySession } from "../study/StudySession";
 import { OutlinePanel } from "./OutlinePanel";
@@ -135,6 +135,12 @@ export class ReaderView {
       initialPage: book.lastPage,
       initialZoom: book.zoom,
       margins: book.margins,
+      ...(book.kind === "notebook"
+        ? {
+            gap: NOTEBOOK_GAP,
+            decorate: notebookPageDecor(doc as NotebookDocument, deps.ink, (n) => this.mainGrown(n), (p) => this.scroller.goToPage(p)),
+          }
+        : {}),
       onPageChange: (p) => this.onPageChange(p),
       onZoomChange: () => {
         this.updateZoomLabel();
@@ -194,7 +200,7 @@ export class ReaderView {
         else this.scroller.goToPage(page + 1);
         this.ink.setMarks(page, rects);
         if (window.innerWidth < 900) this.togglePanel(false);
-      });
+      }, { get: () => deps.index.paused, set: (v) => deps.index.setPaused(v) });
     }
 
     this.sidebar = h(
@@ -223,6 +229,7 @@ export class ReaderView {
       onActivity: () => this.setActive(deps.ink, this.scroller),
       onLinkTap: (link) => this.followLink(link, this.isNotebook ? book.id : null),
       onSelect: this.isNotebook ? undefined : (page, rect, near) => this.openClip(page, rect, near, charsFor),
+      onClipTap: this.isNotebook ? (page, clip) => void editTextClip(deps.ink, page, clip) : undefined,
     });
     if (this.isNotebook) {
       this.unsubGrow = autoExtend(doc as NotebookDocument, deps.ink, (n) => this.mainGrown(n));
@@ -262,23 +269,8 @@ export class ReaderView {
     this.bookmarkBtn.dataset.testid = "bookmark-btn";
     const nbBtn = iconButton("notebook", "Mở vở ghi chép bên cạnh", () => void this.chooseNotebook(nbBtn));
     nbBtn.dataset.testid = "nb-btn";
-    const addPageBtn = iconButton("addPage", "Chèn trang trắng sau trang này", () => {
-      const p = insertPageAfter(doc as NotebookDocument, deps.ink, this.scroller.currentPage);
-      this.mainGrown(doc.numPages);
-      this.scroller.goToPage(p);
-    });
-    addPageBtn.dataset.testid = "add-page";
-    const delPageBtn = iconButton("trash", "Xóa trang này", async () => {
-      const cur = this.scroller.currentPage;
-      if (await deletePageAsk(doc as NotebookDocument, deps.ink, cur)) {
-        this.mainGrown(doc.numPages);
-        this.scroller.goToPage(Math.min(cur, doc.numPages));
-      }
-    });
-    delPageBtn.dataset.testid = "del-page";
     toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, this.bookmarkBtn);
-    if (this.isNotebook) toolGroup.append(addPageBtn, delPageBtn);
-    else toolGroup.append(marginBtn);
+    if (!this.isNotebook) toolGroup.append(marginBtn);
     toolGroup.append(exportBtn);
     if (!this.isNotebook) toolGroup.append(nbBtn);
 
@@ -376,6 +368,8 @@ export class ReaderView {
   }
 
   private renderTools(): void {
+    // Clip frames and resize handles show only while the clip tool is on.
+    this.el?.classList.toggle("tool-clip", this.tools.tool === "clip");
     for (const map of [this.toolButtons, this.pillTools]) {
       for (const [t, b] of map) {
         b.classList.toggle("active", t === this.tools.tool);

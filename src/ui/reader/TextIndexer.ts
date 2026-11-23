@@ -12,6 +12,8 @@ export interface IndexStatus {
   ocrDone: number;
   running: boolean;
   queued: boolean;
+  /** The user paused background OCR. */
+  paused: boolean;
 }
 
 export interface PageHits {
@@ -36,6 +38,8 @@ export class TextIndexer {
   private listeners = new Set<(s: IndexStatus) => void>();
   running = false;
   queued = false;
+  /** Set by the indexing service: is background work paused? */
+  isPaused: () => boolean = () => false;
   /** Reading position (1-based) to OCR nearby pages first. */
   currentPage: () => number = () => 1;
 
@@ -53,6 +57,11 @@ export class TextIndexer {
     return this.loaded;
   }
 
+  /** Every page's own text has been read (OCR may still be pending). */
+  get textDone(): boolean {
+    return this.pages.size >= this.total;
+  }
+
   get complete(): boolean {
     if (this.pages.size < this.total) return false;
     for (const p of this.pages.values()) if (needsOcr(p)) return false;
@@ -66,7 +75,7 @@ export class TextIndexer {
       if (needsOcr(p) || p.source === "ocr") ocrTotal++;
       if (p.source === "ocr") ocrDone++;
     }
-    return { total: this.total, scanned: this.pages.size, ocrTotal, ocrDone, running: this.running, queued: this.queued };
+    return { total: this.total, scanned: this.pages.size, ocrTotal, ocrDone, running: this.running, queued: this.queued, paused: this.isPaused() };
   }
 
   onStatus(fn: (s: IndexStatus) => void): () => void {
@@ -99,7 +108,7 @@ export class TextIndexer {
     this.emit();
     try {
       await this.textPass(doc, signal);
-      await this.ocrPass(doc, ocr, signal);
+      if (!this.isPaused()) await this.ocrPass(doc, ocr, signal);
     } finally {
       this.running = false;
       this.emit();
@@ -129,7 +138,7 @@ export class TextIndexer {
 
   private async ocrPass(doc: PagedDocument, ocr: OcrEngine, signal: AbortSignal): Promise<void> {
     for (;;) {
-      if (signal.aborted) return;
+      if (signal.aborted || this.isPaused()) return;
       const cur = this.currentPage() - 1;
       const todo = [...this.pages.values()].filter(needsOcr).map((p) => p.page);
       if (!todo.length) return;
