@@ -32,6 +32,8 @@ import {
   setLineWidth,
   setStrokingRgbColor,
   stroke,
+  drawObject,
+  type PDFImage,
 } from "pdf-lib";
 import { HIGHLIGHT_OPACITY, linkArrow, strokeCommands } from "../annotations/path";
 import { PATTERN_SPACING, type PaperPattern, type Stroke } from "../annotations/types";
@@ -241,12 +243,38 @@ function linkOps(s: Stroke, font: PDFFont, fontName: PDFName): PDFOperator[] {
   ];
 }
 
-function inkOps(doc: PDFDocument, page: PDFPage, job: PageJob, font: PDFFont | null): PDFOperator[] {
+/** data: URL → bytes, for embedding pasted clips. */
+function dataUrlBytes(url: string): { bytes: Uint8Array; png: boolean } | null {
+  const m = /^data:image\/(png|jpeg);base64,(.*)$/.exec(url);
+  if (!m) return null;
+  const bin = atob(m[2]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { bytes, png: m[1] === "png" };
+}
+
+/** Pictures of pasted clips (text clips arrive already drawn as pictures). */
+function clipOps(page: PDFPage, job: PageJob, images: Map<string, PDFImage>): PDFOperator[] {
+  const ops: PDFOperator[] = [];
+  for (const s of job.strokes) {
+    if (s.tool !== "clip" || !s.rects || !s.clip?.src) continue;
+    const img = images.get(s.clip.src);
+    if (!img) continue;
+    const [x, y, w, h] = s.rects;
+    const name = page.node.newXObject("VLclip", img.ref);
+    // Our y axis points down: flip the unit square so the picture stays upright.
+    ops.push(pushGraphicsState(), concatTransformationMatrix(w, 0, 0, -h, x, y + h), drawObject(name), popGraphicsState());
+  }
+  return ops;
+}
+
+function inkOps(doc: PDFDocument, page: PDFPage, job: PageJob, font: PDFFont | null, images: Map<string, PDFImage>): PDFOperator[] {
   const ops: PDFOperator[] = [pushGraphicsState(), concatTransformationMatrix(...job.toPdf)];
   ops.push(...fullPaperOps(job));
   ops.push(...paperOps(job));
+  ops.push(...clipOps(page, job, images));
   const highlights = job.strokes.filter((s) => s.tool === "highlighter");
-  const ink = job.strokes.filter((s) => s.tool !== "highlighter" && s.tool !== "link");
+  const ink = job.strokes.filter((s) => s.tool !== "highlighter" && s.tool !== "link" && s.tool !== "clip");
   const links = job.strokes.filter((s) => s.tool === "link");
   if (highlights.length) {
     const gs = doc.context.obj({
@@ -321,12 +349,26 @@ async function build(
   const pages = doc.getPages();
   const needsFont = req.jobs.some((j) => j.strokes.some((s) => s.tool === "link"));
   const font = needsFont ? await doc.embedFont(StandardFonts.Helvetica) : null;
+  const images = new Map<string, PDFImage>();
+  for (const job of req.jobs) {
+    for (const s of job.strokes) {
+      const src = s.tool === "clip" ? s.clip?.src : undefined;
+      if (!src || images.has(src)) continue;
+      const d = dataUrlBytes(src);
+      if (!d) continue;
+      try {
+        images.set(src, d.png ? await doc.embedPng(d.bytes) : await doc.embedJpg(d.bytes));
+      } catch (e) {
+        console.warn("clip image skipped", e);
+      }
+    }
+  }
   req.jobs.forEach((job, k) => {
     const page = pages[job.index];
     if (!page) return;
     if (job.marginLeft > 0 || job.marginRight > 0) widenBoxes(page, job);
     isolateExistingContent(doc, page);
-    page.pushOperators(...inkOps(doc, page, job, font));
+    page.pushOperators(...inkOps(doc, page, job, font, images));
     onProgress?.((k + 1) / Math.max(1, req.jobs.length), "draw");
   });
   if (req.keepPages) {

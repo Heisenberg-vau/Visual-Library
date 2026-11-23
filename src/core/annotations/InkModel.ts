@@ -6,7 +6,10 @@ import type { Stroke } from "./types";
  * without touching the drawing code.
  */
 type Removed = { stroke: Stroke; index: number };
-type Op = { kind: "add"; page: number; stroke: Stroke } | { kind: "remove"; page: number; removed: Removed[] };
+type Op =
+  | { kind: "add"; page: number; stroke: Stroke }
+  | { kind: "remove"; page: number; removed: Removed[] }
+  | { kind: "replace"; page: number; before: Stroke; after: Stroke };
 
 export interface InkPersistence {
   savePage(page: number, strokes: Stroke[]): Promise<void>;
@@ -83,6 +86,16 @@ export class InkModel {
     this.emit(page);
   }
 
+  /** Swaps one stroke for an edited copy (e.g. a moved clip) as ONE undo step. */
+  replace(page: number, before: Stroke, after: Stroke): void {
+    if (!(this.pages.get(page) ?? []).some((s) => s.id === before.id)) return;
+    const op: Op = { kind: "replace", page, before, after };
+    this.doOp(op);
+    this.undoStack.push(op);
+    this.redoStack = [];
+    this.emit(page);
+  }
+
   undo(): number | null {
     const op = this.undoStack.pop();
     if (!op) return null;
@@ -106,6 +119,8 @@ export class InkModel {
     if (op.kind === "add") {
       list.push(op.stroke);
       this.set(op.page, list);
+    } else if (op.kind === "replace") {
+      this.set(op.page, list.map((s) => (s.id === op.before.id ? op.after : s)));
     } else {
       const ids = new Set(op.removed.map((e) => e.stroke.id));
       this.set(op.page, list.filter((s) => !ids.has(s.id)));
@@ -116,6 +131,8 @@ export class InkModel {
     const list = [...(this.pages.get(op.page) ?? [])];
     if (op.kind === "add") {
       this.set(op.page, list.filter((s) => s.id !== op.stroke.id));
+    } else if (op.kind === "replace") {
+      this.set(op.page, list.map((s) => (s.id === op.after.id ? op.before : s)));
     } else {
       // Put erased strokes back where they were, so paint order is kept.
       for (const e of [...op.removed].sort((a, b) => a.index - b.index)) {

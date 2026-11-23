@@ -3,6 +3,8 @@ import type { PageLink } from "../../core/annotations/types";
 import type { NotebookDocument } from "../../core/notebook/NotebookDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
+import { CLIP_FONT, CLIP_FONT_FAMILY, CLIP_PAD, makeClipStroke, placeOnPage, textClipSize, wrapLines } from "../../core/notebook/clips";
+import type { ClipPayload } from "./ClipCard";
 import { h, icon, iconButton } from "../dom";
 import { confirmDialog, toast } from "../feedback";
 import { InkLayer, type ToolState } from "./InkLayer";
@@ -142,6 +144,35 @@ export class NotebookPane {
     this.updateLabel();
   }
 
+  /** Pastes a clip where it was dropped. False if the point is not on a page. */
+  dropClip(clientX: number, clientY: number, p: ClipPayload): boolean {
+    const at = this.inkLayer.pagePointAt(clientX, clientY);
+    if (!at) return false;
+    const size = this.deps.doc.pageSize();
+    const room = size.width - 2 * 28;
+    let rect: [number, number, number, number];
+    let stroke;
+    const id = `clip${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    if (p.kind === "image") {
+      const k = Math.min(1, room / p.w, (size.height * 0.85) / p.h);
+      const w = p.w * k;
+      const hh = p.h * k;
+      const [x, y] = placeOnPage(at.x - 8, at.y - 8, w, hh, size.width, size.height);
+      rect = [x, y, w, hh];
+      stroke = makeClipStroke(id, rect, { kind: "image", src: p.src }, p.link);
+    } else {
+      const w = Math.max(140, Math.min(p.w, room));
+      const lines = wrapLines(p.text, w - CLIP_PAD - 2, measureText);
+      const sz = textClipSize(lines, w);
+      const [x, y] = placeOnPage(at.x - 8, at.y - 8, sz.w, sz.h, size.width, size.height);
+      rect = [x, y, sz.w, sz.h];
+      stroke = makeClipStroke(id, rect, { kind: "text", lines, fontSize: CLIP_FONT }, p.link);
+    }
+    this.deps.onActivity();
+    this.deps.ink.add(at.page, stroke);
+    return true;
+  }
+
   flush(): Promise<void> {
     this.deps.onPosition(this.scroller.currentPage, this.scroller.currentZoom);
     return this.deps.ink.flush();
@@ -190,4 +221,12 @@ export class NotebookPane {
     this.scroller.destroy();
     this.el.remove();
   }
+}
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+/** Width of a line of clip text in points (1 canvas px = 1 point here). */
+export function measureText(t: string): number {
+  measureCtx ??= document.createElement("canvas").getContext("2d")!;
+  measureCtx.font = `${CLIP_FONT}px ${CLIP_FONT_FAMILY}`;
+  return measureCtx.measureText(t).width;
 }

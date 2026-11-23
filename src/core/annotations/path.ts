@@ -1,4 +1,5 @@
 import { LINK_FONT } from "../notebook/links";
+import { CLIP_BAR, CLIP_BAR_COLOR, CLIP_FONT, CLIP_FONT_FAMILY, CLIP_LINE, CLIP_PAD } from "../notebook/clips";
 
 /** Arrow icon of a link tag, relative to the tag box. */
 export function linkArrow(x: number, y: number, h: number): number[] {
@@ -56,6 +57,7 @@ const xmlEscape = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 
 export function strokeSvg(s: Stroke): string {
   const esc = s.color.replace(/[^#0-9a-zA-Z(),.%\s]/g, "");
+  if (s.tool === "clip") return clipSvg(s, esc);
   if (s.tool === "link" && s.rects && s.link) {
     const [x, y, w, h] = s.rects;
     return (
@@ -73,4 +75,26 @@ export function strokeSvg(s: Stroke): string {
     return `<path d="${svgPathData(s.points)}" fill="none" stroke="${esc}" stroke-opacity="${HIGHLIGHT_OPACITY}" stroke-width="${s.width}" stroke-linecap="butt" stroke-linejoin="round"/>`;
   }
   return `<path d="${svgPathData(s.points)}" fill="none" stroke="${esc}" stroke-width="${s.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+/** A pasted clip: a picture, or text with a thin quote bar on its left. */
+function clipSvg(s: Stroke, color: string): string {
+  if (!s.rects || !s.clip) return "";
+  const [x, y, w, h] = s.rects;
+  const id = xmlEscape(s.id);
+  if (s.clip.kind === "image" && s.clip.src && /^data:image\/(png|jpeg);base64,/.test(s.clip.src)) {
+    return `<g class="ink-clip" data-id="${id}"><image href="${s.clip.src}" x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" preserveAspectRatio="none"/></g>`;
+  }
+  const fs = s.clip.fontSize ?? CLIP_FONT;
+  const lines = s.clip.lines ?? [];
+  let t = "";
+  lines.forEach((line, i) => {
+    t += `<tspan x="${f(x + CLIP_PAD)}" y="${f(y + fs * (0.95 + i * CLIP_LINE))}">${xmlEscape(line)}</tspan>`;
+  });
+  return (
+    `<g class="ink-clip" data-id="${id}">` +
+    `<rect x="${f(x)}" y="${f(y)}" width="${f(CLIP_BAR)}" height="${f(h)}" fill="${CLIP_BAR_COLOR}"/>` +
+    `<text font-size="${f(fs)}" font-family="${CLIP_FONT_FAMILY.replace(/"/g, "'")}" fill="${color}" xml:space="preserve">${t}</text>` +
+    `<rect class="clip-box" x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" fill="transparent"/></g>`
+  );
 }

@@ -3,10 +3,12 @@ import type { InkModel } from "../../core/annotations/InkModel";
 import { HIGHLIGHT_OPACITY, strokeSvg, svgPathData } from "../../core/annotations/path";
 import type { InkTool, PageLink, Stroke } from "../../core/annotations/types";
 import { linkAt, makeLinkStroke } from "../../core/notebook/links";
+import { clipAt, movedClip, type Rect } from "../../core/notebook/clips";
 import { highlightRects, snapUnderline, type CharBox } from "../../core/text/textGeometry";
 import { isStylus, type PageFrame, type PageScroller, type SlotHooks } from "./PageScroller";
 
-export type Tool = "hand" | InkTool | "eraser";
+/** "clip": cut text/pictures from a book (and move them around in a notebook). */
+export type Tool = "hand" | InkTool | "eraser" | "clip";
 
 export interface ToolState {
   tool: Tool;
@@ -32,6 +34,9 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 interface InkSlot {
   index: number;
   el: HTMLElement;
+  /** Pasted clips, under everything else so you can write on them. */
+  clip: SVGSVGElement;
+  clipKey: string;
   /** Highlights, blended "multiply" so text under them stays crisp. */
   hl: SVGSVGElement;
   /** Pen and underline. */
@@ -44,7 +49,7 @@ interface InkSlot {
 interface Gesture {
   pointerId: number;
   page: number;
-  mode: "draw" | "erase";
+  mode: "draw" | "erase" | "select" | "move";
   tool: InkTool;
   color: string;
   width: number;
@@ -52,6 +57,12 @@ interface Gesture {
   erased: Set<string>;
   lastX: number;
   lastY: number;
+  /** Clip being moved, and where the pen went down (page points / client px). */
+  target?: Stroke;
+  startX: number;
+  startY: number;
+  clientX: number;
+  clientY: number;
 }
 
 /** Optional behaviour used by notebooks. */
@@ -63,6 +74,8 @@ export interface InkLayerOptions {
   onLinkPlaced?: () => void;
   /** A finger tap, or a pen tap without moving, on a page-link tag. */
   onLinkTap?: (link: PageLink) => void;
+  /** With the clip tool: a rectangle was drawn on a page (PDF points; client box for placing UI). */
+  onSelect?: (page: number, rect: Rect, client: { left: number; top: number; right: number; bottom: number }) => void;
 }
 
 let idSeq = 0;
@@ -84,6 +97,8 @@ export class InkLayer implements SlotHooks {
   private tap: { id: number; x: number; y: number; t: number } | null = null;
   /** Search hits to outline (page -> flat x,y,w,h rects); not saved, not exported. */
   private marks = new Map<number, number[]>();
+  /** Area chosen with the clip tool (dashed box), not saved. */
+  private selection: { page: number; rect: Rect } | null = null;
 
   constructor(
     private readonly scroller: PageScroller,
@@ -125,8 +140,8 @@ export class InkLayer implements SlotHooks {
     const live = document.createElementNS(SVG_NS, "path");
     live.setAttribute("fill", "none");
     live.setAttribute("stroke-linejoin", "round");
-    const s: InkSlot = { index, el, hl: mk("ink-hl"), ink: mk("ink-pen"), live, frame };
-    el.append(s.hl, s.ink);
+    const s: InkSlot = { index, el, clip: mk("ink-clips"), clipKey: "", hl: mk("ink-hl"), ink: mk("ink-pen"), live, frame };
+    el.append(s.clip, s.hl, s.ink);
     this.slots.set(index, s);
     this.size(s, frame);
     this.paint(s);
@@ -140,6 +155,7 @@ export class InkLayer implements SlotHooks {
   detach(index: number): void {
     const s = this.slots.get(index);
     if (!s) return;
+    s.clip.remove();
     s.hl.remove();
     s.ink.remove();
     this.slots.delete(index);
@@ -151,7 +167,7 @@ export class InkLayer implements SlotHooks {
     const w = f.width / f.scale;
     const hgt = f.height / f.scale;
     const ox = f.offsetX / f.scale;
-    for (const svg of [s.hl, s.ink]) {
+    for (const svg of [s.clip, s.hl, s.ink]) {
       svg.setAttribute("viewBox", `${-ox} 0 ${w} ${hgt}`);
     }
   }
@@ -166,6 +182,26 @@ export class InkLayer implements SlotHooks {
     for (const p of new Set([...old, page])) this.redraw(p);
   }
 
+  /** Shows (or clears) the dashed box of the clip tool. */
+  setSelection(page: number | null, rect?: Rect): void {
+    const old = this.selection?.page;
+    this.selection = page === null || !rect ? null : { page, rect };
+    if (old !== undefined) this.redraw(old);
+    if (page !== null) this.redraw(page);
+  }
+
+  /** Page and PDF point under a client position (for dropping clips). */
+  pagePointAt(clientX: number, clientY: number): { page: number; x: number; y: number } | null {
+    for (const [page, s] of this.slots) {
+      const r = s.el.getBoundingClientRect();
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+        const pt = this.toPage(page, clientX, clientY);
+        return pt ? { page, ...pt } : null;
+      }
+    }
+    return null;
+  }
+
   redraw(page: number): void {
     const s = this.slots.get(page);
     if (s) this.paint(s);
@@ -175,10 +211,22 @@ export class InkLayer implements SlotHooks {
     const skip = this.gesture?.page === s.index ? this.gesture.erased : null;
     let hl = "";
     let ink = "";
+    const clips: Stroke[] = [];
     for (const st of this.model.strokes(s.index)) {
       if (skip?.has(st.id)) continue;
-      if (st.tool === "highlighter") hl += strokeSvg(st);
+      if (st.tool === "clip") clips.push(st);
+      else if (st.tool === "highlighter") hl += strokeSvg(st);
       else ink += strokeSvg(st);
+    }
+    // Pictures are big: only rebuild this layer when the clips themselves change.
+    const key = clips.map((c) => `${c.id}@${c.rects?.join(",")}`).join("|");
+    if (key !== s.clipKey) {
+      s.clipKey = key;
+      (s.clip.firstChild as SVGGElement).innerHTML = clips.map(strokeSvg).join("");
+    }
+    const sel = this.selection?.page === s.index ? this.selection.rect : null;
+    if (sel) {
+      ink += `<rect class="clip-select" data-testid="clip-select" x="${sel[0]}" y="${sel[1]}" width="${sel[2]}" height="${sel[3]}" fill="rgba(31,95,191,0.06)" stroke="#1f5fbf" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
     }
     const m = this.marks.get(s.index);
     if (m) {
@@ -196,6 +244,22 @@ export class InkLayer implements SlotHooks {
     if (!g || g.mode === "erase") return;
     const s = this.slots.get(g.page);
     if (!s) return;
+    if (g.mode === "move") {
+      const el = s.clip.querySelector(`[data-id="${CSS.escape(g.target!.id)}"]`);
+      el?.setAttribute("transform", `translate(${g.lastX - g.startX} ${g.lastY - g.startY})`);
+      return;
+    }
+    if (g.mode === "select") {
+      const [x0, y0, x1, y1] = [g.startX, g.startY, g.lastX, g.lastY];
+      if (s.live.parentNode !== s.ink) s.ink.append(s.live);
+      s.live.setAttribute("d", `M${x0} ${y0}H${x1}V${y1}H${x0}Z`);
+      s.live.setAttribute("stroke", "#1f5fbf");
+      s.live.setAttribute("stroke-width", String(1 / s.frame.scale));
+      s.live.setAttribute("stroke-dasharray", `${4 / s.frame.scale} ${3 / s.frame.scale}`);
+      s.live.setAttribute("stroke-opacity", "1");
+      return;
+    }
+    s.live.removeAttribute("stroke-dasharray");
     let pts = g.points;
     if (g.tool === "underline" && pts.length >= 4) pts = snapHorizontal([pts[0], pts[1], pts[pts.length - 2], pts[pts.length - 1]]);
     const live = s.live;
@@ -247,7 +311,7 @@ export class InkLayer implements SlotHooks {
   private tapLink(page: number, clientX: number, clientY: number): boolean {
     if (!this.opts.onLinkTap) return false;
     const pt = this.toPage(page, clientX, clientY);
-    const hit = pt ? linkAt(this.model.strokes(page), pt.x, pt.y, 3) : null;
+    const hit = pt ? linkAt(this.model.strokes(page), pt.x, pt.y, 3, true) : null;
     if (hit?.link) {
       this.opts.onLinkTap(hit.link);
       return true;
@@ -273,9 +337,19 @@ export class InkLayer implements SlotHooks {
       this.opts.onLinkPlaced?.();
       return;
     }
+    const t = this.tools();
+    const base = { pointerId: e.pointerId, page, points: [], erased: new Set<string>(), lastX: pt.x, lastY: pt.y, startX: pt.x, startY: pt.y, clientX: e.clientX, clientY: e.clientY, tool: "pen" as InkTool, color: "", width: 1 };
+    if (t.tool === "clip" && (e.buttons & 32) === 0) {
+      const target = clipAt(this.model.strokes(page), pt.x, pt.y);
+      if (!target && !this.opts.onSelect) return; // nothing to do here; leave the pen alone
+      this.scroller.el.setPointerCapture?.(e.pointerId);
+      if (e.pointerType === "pen") this.lastPenAt = performance.now();
+      this.gesture = target ? { ...base, mode: "move", target } : { ...base, mode: "select" };
+      if (!target) this.setSelection(null);
+      return;
+    }
     this.scroller.el.setPointerCapture?.(e.pointerId);
     if (e.pointerType === "pen") this.lastPenAt = performance.now();
-    const t = this.tools();
     const erase = t.tool === "eraser" || (e.buttons & 32) !== 0;
     const tool: InkTool = t.tool === "highlighter" || t.tool === "underline" ? t.tool : "pen";
     if (!erase && tool !== "pen") void this.textChars(page); // warm the cache while drawing
@@ -290,6 +364,10 @@ export class InkLayer implements SlotHooks {
       erased: new Set(),
       lastX: pt.x,
       lastY: pt.y,
+      startX: pt.x,
+      startY: pt.y,
+      clientX: e.clientX,
+      clientY: e.clientY,
     };
     if (erase) this.eraseAt(pt.x, pt.y);
     else this.scheduleLive();
@@ -305,9 +383,12 @@ export class InkLayer implements SlotHooks {
       const pt = this.toPage(g.page, ev.clientX, ev.clientY);
       if (!pt) continue;
       if (g.mode === "erase") this.eraseAt(pt.x, pt.y);
-      else g.points.push(round1(pt.x), round1(pt.y));
+      else if (g.mode === "select" || g.mode === "move") {
+        g.lastX = pt.x;
+        g.lastY = pt.y;
+      } else g.points.push(round1(pt.x), round1(pt.y));
     }
-    if (g.mode === "draw") this.scheduleLive();
+    if (g.mode !== "erase") this.scheduleLive();
   };
 
   private eraseAt(x: number, y: number): void {
@@ -339,6 +420,31 @@ export class InkLayer implements SlotHooks {
     const g = this.gesture;
     if (!g || e.pointerId !== g.pointerId) return;
     this.gesture = null;
+    if (g.mode === "move") {
+      const dx = g.lastX - g.startX;
+      const dy = g.lastY - g.startY;
+      const s = this.slots.get(g.page);
+      if (Math.hypot(dx, dy) > 0.5) this.model.replace(g.page, g.target!, movedClip(g.target!, dx, dy));
+      else s?.clip.querySelector(`[data-id="${CSS.escape(g.target!.id)}"]`)?.removeAttribute("transform");
+      return;
+    }
+    if (g.mode === "select") {
+      this.clearLive(g.page);
+      const x = Math.min(g.startX, g.lastX);
+      const y = Math.min(g.startY, g.lastY);
+      const w = Math.abs(g.lastX - g.startX);
+      const hh = Math.abs(g.lastY - g.startY);
+      if (w < 8 || hh < 6) return; // a tap
+      const rect: Rect = [round1(x), round1(y), round1(w), round1(hh)];
+      this.setSelection(g.page, rect);
+      this.opts.onSelect?.(g.page, rect, {
+        left: Math.min(g.clientX, e.clientX),
+        top: Math.min(g.clientY, e.clientY),
+        right: Math.max(g.clientX, e.clientX),
+        bottom: Math.max(g.clientY, e.clientY),
+      });
+      return;
+    }
     // A pen tap (no movement) on a link tag follows the link instead of leaving a dot.
     if (g.mode === "draw" && this.opts.onLinkTap) {
       const p = g.points;
@@ -385,6 +491,7 @@ export class InkLayer implements SlotHooks {
     if (!g || e.pointerId !== g.pointerId) return;
     this.gesture = null;
     this.clearLive(g.page);
+    if (g.mode === "move") this.slots.get(g.page)?.clip.querySelector(`[data-id="${CSS.escape(g.target!.id)}"]`)?.removeAttribute("transform");
     this.redraw(g.page);
   };
 

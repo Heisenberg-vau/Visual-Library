@@ -11,6 +11,9 @@ import { layoutChars } from "../../core/text/textGeometry";
 import { runsFromWords } from "../../core/text/words";
 import { SearchPanel } from "./SearchPanel";
 import type { TextIndexer } from "./TextIndexer";
+import { ClipCard } from "./ClipCard";
+import { textFromWords, wordsInRect, type Rect } from "../../core/notebook/clips";
+import { wordsFromChars } from "../../core/text/words";
 import { h, icon, iconButton } from "../dom";
 import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
@@ -101,6 +104,7 @@ export class ReaderView {
   private main: HTMLElement;
   private divider: HTMLElement;
   private nbPane: NotebookPane | null = null;
+  private clipCard: ClipCard | null = null;
   /** Undo/redo act on the pane last written in. */
   private activeInk: InkModel;
   private activeScroller: PageScroller;
@@ -218,6 +222,7 @@ export class ReaderView {
     this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory(), charsFor, {
       onActivity: () => this.setActive(deps.ink, this.scroller),
       onLinkTap: (link) => this.followLink(link, this.isNotebook ? book.id : null),
+      onSelect: this.isNotebook ? undefined : (page, rect, near) => this.openClip(page, rect, near, charsFor),
     });
     if (this.isNotebook) {
       this.unsubGrow = autoExtend(doc as NotebookDocument, deps.ink, (n) => this.mainGrown(n));
@@ -229,6 +234,7 @@ export class ReaderView {
       ["highlighter", "highlighter", "Bút dạ quang"],
       ["underline", "underline", "Gạch chân (nét thẳng)"],
       ["eraser", "eraser", "Tẩy (xóa cả nét)"],
+      ["clip", "scissors", this.isNotebook ? "Di chuyển chữ/hình đã dán" : "Cắt chữ/hình sang vở: dùng bút kéo một khung quanh đoạn cần lấy"],
     ];
     for (const [t, ic, label] of toolDefs) {
       const b = iconButton(ic, label, () => this.setTool(t), "tool-btn");
@@ -355,6 +361,10 @@ export class ReaderView {
   // ---- ink tools ------------------------------------------------------
 
   private setTool(t: Tool): void {
+    if (t !== "clip") this.clipCard?.close();
+    if (t === "clip" && this.tools.tool !== "clip") {
+      toast(this.isNotebook ? "Dùng bút kéo chữ/hình đã dán để di chuyển." : "Dùng bút kéo một khung quanh chữ hoặc hình cần lấy.");
+    }
     this.tools = { ...this.tools, tool: t };
     this.renderTools();
     this.deps.onToolsChange(this.tools);
@@ -587,6 +597,60 @@ export class ReaderView {
     if (typeof chosen === "string") await this.openNotebook(chosen);
   }
 
+  /** After framing part of a book page with the clip tool. */
+  private openClip(page: number, rect: Rect, near: { left: number; top: number; right: number; bottom: number }, charsFor: (p: number) => Promise<import("../../core/text/textGeometry").CharBox[]>): void {
+    this.clipCard?.close();
+    const doc = this.deps.doc;
+    const size = doc.pageSize(page);
+    // Only the page itself (not the widened margin).
+    const x0 = Math.max(0, rect[0]);
+    const y0 = Math.max(0, rect[1]);
+    const x1 = Math.min(size.width, rect[0] + rect[2]);
+    const y1 = Math.min(size.height, rect[1] + rect[3]);
+    if (x1 - x0 < 4 || y1 - y0 < 4) {
+      this.ink.setSelection(null);
+      return;
+    }
+    const r: Rect = [x0, y0, x1 - x0, y1 - y0];
+    const book = this.deps.book;
+    const card: ClipCard = new ClipCard({
+      near,
+      link: { bookId: book.id, page: page + 1, label: linkLabel(book.title, page + 1) },
+      size: { w: r[2], h: r[3] },
+      text: async () => textFromWords(wordsInRect(wordsFromChars(await charsFor(page)), r)),
+      image: () => this.cutImage(page, r),
+      hasNotebook: () => !!this.nbPane,
+      openNotebook: () => void this.pickNotebook().then(() => card.refresh()),
+      drop: (cx, cy, payload) => this.nbPane?.dropClip(cx, cy, payload) ?? false,
+      onClose: () => {
+        if (this.clipCard === card) this.clipCard = null;
+        this.ink.setSelection(null);
+      },
+    });
+    this.clipCard = card;
+  }
+
+  /** A sharp picture of part of a page (data: URL). */
+  private async cutImage(page: number, r: Rect): Promise<string> {
+    const size = this.deps.doc.pageSize(page);
+    // ~200 dpi, capped so huge pages don't blow up memory.
+    const scale = Math.min(2.8, 4200 / Math.max(size.width, size.height));
+    const full = document.createElement("canvas");
+    await this.deps.doc.renderPage(page, full, scale, 1, new AbortController().signal);
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.round(r[2] * scale));
+    out.height = Math.max(1, Math.round(r[3] * scale));
+    const ctx = out.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(full, r[0] * scale, r[1] * scale, r[2] * scale, r[3] * scale, 0, 0, out.width, out.height);
+    full.width = 0;
+    let url = out.toDataURL("image/png");
+    if (url.length > 1_800_000) url = out.toDataURL("image/jpeg", 0.9); // photos: smaller as JPEG
+    out.width = 0;
+    return url;
+  }
+
   async openNotebook(id: string): Promise<void> {
     if (this.nbPane?.id === id) return;
     await this.closeNotebook(false);
@@ -623,12 +687,14 @@ export class ReaderView {
     this.applyRatio(host.splitRatio);
     pane.start();
     host.setCompanion(meta.id);
+    this.clipCard?.refresh();
   }
 
   async closeNotebook(forget = true): Promise<void> {
     const pane = this.nbPane;
     if (!pane) return;
     this.nbPane = null;
+    this.clipCard?.refresh();
     if (this.activeInk !== this.deps.ink) this.setActive(this.deps.ink, this.scroller);
     await pane.destroy();
     this.divider.remove();
@@ -863,6 +929,7 @@ export class ReaderView {
     clearTimeout(this.dwellTimer);
     this.deps.index.focus(null);
     this.searchPanel?.destroy();
+    this.clipCard?.close();
     if (this.focusOn) this.setFocus(false, true);
     window.removeEventListener("popstate", this.onPopState);
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);

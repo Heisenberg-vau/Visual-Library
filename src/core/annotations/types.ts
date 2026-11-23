@@ -14,10 +14,23 @@ export interface PageLink {
   label: string;
 }
 
+/** Text or a picture cut from a book and placed in a notebook. */
+export interface ClipData {
+  kind: "image" | "text";
+  /** Picture (data: URL, PNG or JPEG). */
+  src?: string;
+  /** Text, already wrapped into lines at `fontSize`. */
+  lines?: string[];
+  fontSize?: number;
+}
+
 export interface Stroke {
   id: string;
-  /** "link": a page-link tag (drawn as a chip; `rects` holds its box). */
-  tool: InkTool | "link";
+  /**
+   * "link": a page-link tag (drawn as a chip; `rects` holds its box).
+   * "clip": text/picture from a book (`rects` = its box, `link` = where it came from).
+   */
+  tool: InkTool | "link" | "clip";
   /** CSS colour, e.g. "#1d2430". */
   color: string;
   /** Line width in PDF points. */
@@ -30,6 +43,7 @@ export interface Stroke {
    */
   rects?: number[];
   link?: PageLink;
+  clip?: ClipData;
 }
 
 export interface PageInk {

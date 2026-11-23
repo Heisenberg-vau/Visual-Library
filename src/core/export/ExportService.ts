@@ -83,8 +83,39 @@ export async function buildExportJobs(
   return { jobs, keepPages: opts.scope === "annotated" ? inked : null };
 }
 
+/**
+ * Text clips are drawn into pictures before export: standard PDF fonts have
+ * no Vietnamese letters, and the picture matches the screen exactly.
+ */
+export async function rasterizeTextClips(jobs: PageJob[]): Promise<PageJob[]> {
+  const { CLIP_BAR, CLIP_BAR_COLOR, CLIP_FONT, CLIP_FONT_FAMILY, CLIP_LINE, CLIP_PAD } = await import("../notebook/clips");
+  const K = 4; // pixels per point (~290 dpi)
+  return jobs.map((job) => {
+    if (!job.strokes.some((s) => s.tool === "clip" && s.clip?.kind === "text")) return job;
+    const strokes = job.strokes.map((s) => {
+      if (s.tool !== "clip" || s.clip?.kind !== "text" || !s.rects) return s;
+      const [, , w, h] = s.rects;
+      const fs = s.clip.fontSize ?? CLIP_FONT;
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.ceil(w * K));
+      c.height = Math.max(1, Math.ceil(h * K));
+      const ctx = c.getContext("2d")!;
+      ctx.scale(K, K);
+      ctx.fillStyle = CLIP_BAR_COLOR;
+      ctx.fillRect(0, 0, CLIP_BAR, h);
+      ctx.fillStyle = s.color;
+      ctx.font = `${fs}px ${CLIP_FONT_FAMILY}`;
+      (s.clip.lines ?? []).forEach((line, i) => ctx.fillText(line, CLIP_PAD, fs * (0.95 + i * CLIP_LINE)));
+      const src = c.toDataURL("image/png");
+      c.width = 0;
+      return { ...s, clip: { ...s.clip, src } };
+    });
+    return { ...job, strokes };
+  });
+}
+
 /** Runs the export in a worker. */
-export function runExportWorker(
+export async function runExportWorker(
   file: Blob | null,
   jobs: PageJob[],
   keepPages: number[] | null,
@@ -92,6 +123,7 @@ export function runExportWorker(
   onProgress: (fraction: number, phase: string) => void,
   blank?: { count: number; width: number; height: number },
 ): Promise<Uint8Array> {
+  jobs = await rasterizeTextClips(jobs);
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL("./export.worker.ts", import.meta.url), { type: "module" });
     w.onmessage = (e) => {

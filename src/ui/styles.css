@@ -656,3 +656,19 @@ body[data-tone="dark"] .reader-body { background: #2b2d31; }
 
 .ocr-status { font-size: 12px; color: #9a5a12; background: #fff4e5; padding: 4px 12px; border-top: 1px solid #f3dcc0; }
 .format-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; margin-right: 6px; border-radius: 8px; background: #e7effc; color: #2b579a; vertical-align: 1px; }
+
+/* Clip tool: cut text/pictures from a book into a notebook */
+.clip-card { position: fixed; z-index: 60; width: 300px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.18); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.clip-card.dragging { opacity: 0.85; box-shadow: 0 16px 40px rgb(0 0 0 / 0.28); transform: rotate(-1.5deg); }
+.clip-head { display: flex; align-items: center; gap: 8px; color: var(--ink, #1d2430); }
+.clip-head .grow { flex: 1; }
+.clip-preview { touch-action: none; cursor: grab; border: 1px dashed #9db7e0; border-radius: 10px; background: #f7f9fd; min-height: 64px; max-height: 190px; overflow: hidden; display: grid; place-items: center; padding: 6px; user-select: none; -webkit-user-select: none; }
+.clip-card.dragging .clip-preview { cursor: grabbing; }
+.clip-preview img { max-width: 100%; max-height: 176px; display: block; pointer-events: none; }
+.clip-text { margin: 0; font-size: 13px; line-height: 1.4; color: #1d2430; display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; border-left: 3px solid #9db7e0; padding-left: 8px; justify-self: stretch; }
+.clip-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg-btn { border: 0; background: transparent; padding: 8px 16px; min-height: 40px; font: inherit; cursor: pointer; }
+.seg-btn.active { background: #1f3a5f; color: #fff; }
+.clip-hint { font-size: 13px; color: #5b6576; }
+.btn.small { min-height: 36px; padding: 0 12px; font-size: 14px; }

@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { PDFDocument } from "pdf-lib";
+import { PDFName, PDFDocument } from "pdf-lib";
 
 const PORT = 4173;
 const URL = `http://localhost:${PORT}/`;
@@ -924,6 +924,113 @@ test("milestone 8: a .docx is laid out into pages, searchable without OCR, and e
   const { path, name } = await exportVia("Chỉ các trang có ghi chú");
   assert.equal(name, "Bao cao dong co (ghi chu).pdf");
   assert.equal((await PDFDocument.load(readFileSync(path))).getPageCount(), 1);
+  await backToShelf();
+});
+
+// ---- cut text and pictures from a book into a notebook ----
+
+const nbClips = (pageNo) => page.evaluate((n) => window.__reader.notebookPaneForTests.inkModel.strokes(n - 1).filter((s) => s.tool === "clip").map((s) => ({ id: s.id, kind: s.clip.kind, lines: s.clip.lines, src: (s.clip.src || "").slice(0, 22), rects: s.rects, link: s.link })), pageNo);
+
+/** Drags the clip card (with the pen) onto a point of a notebook page. */
+async function dragClipTo(nbPage, fx, fy) {
+  const c = await cdp();
+  const from = await page.locator('[data-testid="clip-drag"]').boundingBox();
+  const slot = await page.locator(`${NB} .page-slot[data-page="${nbPage}"]`).boundingBox();
+  const a = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+  const b = { x: slot.x + fx * slot.width, y: slot.y + fy * slot.height };
+  await c.send("Input.dispatchMouseEvent", { type: "mousePressed", ...a, button: "left", buttons: 1, clickCount: 1, pointerType: "pen" });
+  for (let i = 1; i <= 12; i++) {
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: a.x + ((b.x - a.x) * i) / 12, y: a.y + ((b.y - a.y) * i) / 12, button: "left", buttons: 1, pointerType: "pen" });
+  }
+  await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...b, button: "left", buttons: 0, clickCount: 1, pointerType: "pen" });
+}
+
+test("clip: frame text in the book, drag it into the notebook as text", async () => {
+  await openBook("650");
+  if (!(await page.evaluate(() => !!window.__reader.notebookPaneForTests))) {
+    await page.click('[data-testid="nb-btn"]');
+    await page.locator('[data-testid="nb-choice"]', { hasText: "Vở M15" }).click();
+  }
+  await page.waitForFunction(() => !!window.__reader.notebookPaneForTests);
+  await page.waitForSelector(`${NB} .page-slot`);
+  await page.evaluate(() => window.__reader.notebookPaneForTests.scroller.goToPage(2));
+  await page.waitForSelector(`${NB} .page-slot[data-page="2"] canvas`);
+  await gotoPage(40);
+  await waitRendered(40);
+  await tool("clip");
+  // Lines 1–3 of the body text.
+  await penStroke(40, [[0.08, 0.222], [0.92, 0.292]]);
+  await page.waitForSelector('[data-testid="clip-card"][data-ready="1"]');
+  assert.equal(await page.locator('[data-testid="clip-select"]').count(), 1, "dashed frame shown");
+  assert.match(await page.getAttribute('[data-testid="clip-mode-text"]', "class"), /active/, "text by default");
+  const preview = await page.textContent('[data-testid="clip-drag"]');
+  assert.match(preview, /^Line 1 of page 40: turbine .* Line 3 of page 40/);
+  assert.doesNotMatch(preview, /Line 4/);
+  await shot("27-clip-card");
+  await dragClipTo(2, 0.12, 0.1);
+  await page.waitForSelector('[data-testid="clip-card"]', { state: "detached" });
+  const [clip] = await nbClips(2);
+  assert.equal(clip.kind, "text");
+  assert.match(clip.lines.join(" "), /Line 1 of page 40: turbine compressor combustion nozzle bearing Line 2/);
+  assert.equal(clip.link.page, 40, "remembers where it came from");
+  assert.equal(await page.locator('[data-testid="clip-select"]').count(), 0);
+  await page.waitForSelector(`${NB} .page-slot[data-page="2"] .ink-clip text`);
+});
+
+test("clip: a picture of the page, moved with the pen, undo, tap to go back", async () => {
+  // The big "Page 40" heading as a picture.
+  await penStroke(40, [[0.08, 0.06], [0.6, 0.165]]);
+  await page.waitForSelector('[data-testid="clip-card"][data-ready="1"]');
+  await page.click('[data-testid="clip-mode-image"]');
+  await page.waitForSelector('[data-testid="clip-drag"] img');
+  await dragClipTo(2, 0.12, 0.5);
+  await page.waitForFunction(() => window.__reader.notebookPaneForTests.inkModel.strokes(1).filter((s) => s.tool === "clip").length === 2);
+  const img = (await nbClips(2)).find((c) => c.kind === "image");
+  assert.match(img.src, /^data:image\/(png|jpeg)/);
+  assert.ok(img.rects[2] > 250, "keeps its size");
+  await page.waitForSelector(`${NB} .page-slot[data-page="2"] .ink-clip image`);
+  await shot("28-clip-notebook");
+
+  // Move it down with the pen (clip tool), then undo.
+  const before = img.rects;
+  const k = 1 / 842;
+  const cx = (before[0] + before[2] / 2) / 595;
+  const cy = (before[1] + before[3] / 2) * k;
+  await penStroke(2, [[cx, cy], [cx, cy + 0.15]], { root: NB });
+  const moved = (await nbClips(2)).find((c) => c.kind === "image").rects;
+  assert.ok(moved[1] > before[1] + 80, `moved down (${before[1]} → ${moved[1]})`);
+  await page.click('[data-testid="undo"]');
+  assert.deepEqual((await nbClips(2)).find((c) => c.kind === "image").rects, before);
+
+  // Pen writes on top of a clip.
+  await tool("pen");
+  const pens = () => page.evaluate(() => window.__reader.notebookPaneForTests.inkModel.strokes(1).filter((s) => s.tool === "pen").length);
+  const pen0 = await pens();
+  await penStroke(2, [[cx - 0.1, cy], [cx + 0.1, cy + 0.01]], { root: NB });
+  assert.equal(await pens(), pen0 + 1);
+
+  // A finger tap on the clip goes back to its page in the book.
+  await gotoPage(7);
+  const slot = await page.locator(`${NB} .page-slot[data-page="2"]`).boundingBox();
+  const s = slot.width / 595;
+  const c = await cdp();
+  const txt = (await nbClips(2)).find((x) => x.kind === "text");
+  await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: slot.x + (txt.rects[0] + 20) * s, y: slot.y + (txt.rects[1] + 6) * s }] });
+  await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForFunction(() => window.__reader.scrollerForTests.currentPage === 40, null, { timeout: 5000 });
+  await backToShelf();
+});
+
+test("clip: notebook export keeps the pasted text and picture", async () => {
+  await cards().filter({ hasText: "Vở M15" }).click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  const { path } = await exportVia("Chỉ các trang có ghi chú");
+  const doc = await PDFDocument.load(readFileSync(path));
+  const p2 = doc.getPages().find((pg) => {
+    const xo = pg.node.Resources()?.lookup(PDFName.of("XObject"));
+    return xo && xo.keys().length >= 2;
+  });
+  assert.ok(p2, "a page with the two clips as images");
   await backToShelf();
 });
 

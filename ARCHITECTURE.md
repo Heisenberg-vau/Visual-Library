@@ -35,6 +35,11 @@ src/
   so the canvas stays exportable) and assembled into a reading-copy PDF with
   pdf-lib. The original is kept under `<id>.orig`; word boxes from the layout go
   into the text index as source "docx", so those pages are never OCR'd.
+- Clips (book → notebook) are strokes with `tool: "clip"`: `rects` is the box,
+  `clip` holds a picture (data: URL) or text pre-wrapped into lines, `link` the
+  source page. They live in the same undo/persist/export path as ink; a move is
+  one `replace` op. Text clips are drawn into pictures at export time because
+  standard PDF fonts lack Vietnamese letters.
 - Indexing/OCR is app-wide (`app/IndexService.ts`): it starts right after
   import, one book at a time; the open book and its current pages go first.
   Pages whose PDF text is fine keep it; every other page (scan, broken or

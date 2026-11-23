@@ -32,10 +32,10 @@ export function makeLinkStroke(id: string, x: number, y: number, link: PageLink)
 }
 
 /** Link chip under a point, if any (topmost first). */
-export function linkAt(strokes: readonly Stroke[], x: number, y: number, pad = 2): Stroke | null {
+export function linkAt(strokes: readonly Stroke[], x: number, y: number, pad = 2, withClips = false): Stroke | null {
   for (let i = strokes.length - 1; i >= 0; i--) {
     const s = strokes[i];
-    if (s.tool !== "link" || !s.rects) continue;
+    if (!s.rects || !s.link || (s.tool !== "link" && !(withClips && s.tool === "clip"))) continue;
     const [rx, ry, rw, rh] = s.rects;
     if (x >= rx - pad && x <= rx + rw + pad && y >= ry - pad && y <= ry + rh + pad) return s;
   }
