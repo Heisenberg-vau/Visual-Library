@@ -61,6 +61,12 @@ src/
 - **Reading progress** (`core/study/reading.ts`, DB v5): a page counts as read
   after 8 s as the main page; a per-book bitset gives "pages actually read"
   for non-linear reading, plus a per-day set for the optional daily goal.
+- **Search & OCR** (`core/text`, DB v6 `pageText`): `TextIndexer` reads each
+  page's text (fonts with shifted codes are repaired per font by
+  `encoding.ts`), marks scans and unreadable pages "pending", then OCRs them
+  with Tesseract (offline, eng+vie, nearest page first) and stores words with
+  boxes. Search is accent-insensitive over those words; OCR words also feed
+  highlight/underline snapping on scans.
 - **Input rules:** pen (and mouse, for laptops) writes; fingers only scroll and
   pinch. Stylus touches are `preventDefault`-ed so the page never scrolls under
   the pen, and touches are ignored for 250 ms after pen activity (palm).

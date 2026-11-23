@@ -6,6 +6,12 @@ import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
 import { DWELL_MS } from "../../core/study/reading";
+import type { OcrEngine } from "../../core/text/ocr";
+import type { TextIndexStore } from "../../core/text/TextIndexStore";
+import { layoutChars } from "../../core/text/textGeometry";
+import { runsFromWords } from "../../core/text/words";
+import { SearchPanel } from "./SearchPanel";
+import { TextIndexer } from "./TextIndexer";
 import { h, icon, iconButton } from "../dom";
 import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
@@ -33,6 +39,7 @@ export interface ReaderDeps {
   /** A page (0-based) stayed on screen long enough to count as read. */
   onPageRead: (page: number) => void;
   onBookmarks: (pages: number[]) => void;
+  textIndex: { store: TextIndexStore; ocr: OcrEngine };
 }
 
 /** What the reader needs from the app to work with exercise books. */
@@ -68,7 +75,7 @@ const PATTERNS: { label: string; p: PaperPattern }[] = [
   { label: "Nền lề: trơn", p: "blank" },
 ];
 
-type PanelTab = "thumbs" | "outline" | "marks";
+type PanelTab = "thumbs" | "outline" | "marks" | "search";
 
 /** Reading screen: toolbar, page view and the side panel. */
 export class ReaderView {
@@ -108,6 +115,9 @@ export class ReaderView {
   private bookmarks: number[];
   private bookmarkBtn!: HTMLButtonElement;
   private marksList: HTMLElement;
+  private indexer: TextIndexer | null = null;
+  private searchPanel: SearchPanel | null = null;
+  private indexTimer = 0;
 
   constructor(private readonly deps: ReaderDeps) {
     const { book, doc } = deps;
@@ -164,17 +174,45 @@ export class ReaderView {
 
     const mkTab = (t: PanelTab, label: string) =>
       h("button", { class: "tab", type: "button", "data-tab": t, onclick: () => this.showTab(t) }, label);
-    this.tabButtons = { thumbs: mkTab("thumbs", "Trang"), outline: mkTab("outline", "Mục lục"), marks: mkTab("marks", "Đánh dấu") };
+    this.tabButtons = {
+      thumbs: mkTab("thumbs", "Trang"),
+      outline: mkTab("outline", "Mục lục"),
+      marks: mkTab("marks", "Đánh dấu"),
+      search: mkTab("search", "Tìm"),
+    };
+    if (!this.isNotebook) {
+      this.indexer = new TextIndexer(book.id, doc, deps.textIndex.store, deps.textIndex.ocr, () => this.scroller.currentPage);
+      this.searchPanel = new SearchPanel(this.indexer, (page, rects) => {
+        if (rects.length) this.scroller.goToPoint(page, rects[1]);
+        else this.scroller.goToPage(page + 1);
+        this.ink.setMarks(page, rects);
+        if (window.innerWidth < 900) this.togglePanel(false);
+      });
+    }
 
     this.sidebar = h(
       "aside",
       { class: "sidebar", "data-testid": "sidebar" },
-      h("div", { class: "tabs" }, this.tabButtons.thumbs, this.tabButtons.outline, this.tabButtons.marks),
-      h("div", { class: "sidebar-body" }, this.thumbs.el, this.outline.el, this.marksList),
+      h(
+        "div",
+        { class: "tabs" },
+        this.tabButtons.thumbs,
+        this.tabButtons.outline,
+        this.tabButtons.marks,
+        this.isNotebook ? null : this.tabButtons.search,
+      ),
+      h("div", { class: "sidebar-body" }, this.thumbs.el, this.outline.el, this.marksList, this.searchPanel?.el ?? null),
     );
 
     this.activeScroller = this.scroller;
-    this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory(), (p) => doc.textChars(p), {
+    // Character boxes for snapping: the PDF's own, or OCR words on scans.
+    const charsFor = async (p: number) => {
+      const own = await doc.textChars(p);
+      if (own.length) return own;
+      const ocr = this.indexer?.ocrWords(p);
+      return ocr ? layoutChars(runsFromWords(ocr)) : own;
+    };
+    this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory(), charsFor, {
       onActivity: () => this.setActive(deps.ink, this.scroller),
       onLinkTap: (link) => this.followLink(link, this.isNotebook ? book.id : null),
     });
@@ -659,9 +697,15 @@ export class ReaderView {
     this.scroller.start();
     this.updateBookmarkBtn();
     this.armDwell(this.scroller.currentPage);
+    // Index text after the first pages are on screen.
+    this.indexTimer = window.setTimeout(() => void this.indexer?.start(), 1500);
     this.scroller.el.focus({ preventScroll: true });
     const companion = this.deps.notebooks.companionId;
     if (companion && !this.isNotebook) void this.openNotebook(companion);
+  }
+
+  get indexerForTests(): TextIndexer | null {
+    return this.indexer;
   }
 
   get notebookPaneForTests(): NotebookPane | null {
@@ -770,7 +814,9 @@ export class ReaderView {
     this.thumbs.el.hidden = t !== "thumbs";
     this.outline.el.hidden = t !== "outline";
     this.marksList.hidden = t !== "marks";
+    if (this.searchPanel) this.searchPanel.el.hidden = t !== "search";
     if (t === "marks") this.renderMarks();
+    if (t === "search") this.searchPanel?.focus();
     this.thumbs.setActive(this.panelOpen && t === "thumbs");
     if (t === "outline") void this.outline.ensureLoaded();
   }
@@ -799,6 +845,10 @@ export class ReaderView {
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
       e.preventDefault();
       this.redo();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && this.searchPanel) {
+      e.preventDefault();
+      if (!this.panelOpen) this.togglePanel(true);
+      this.showTab("search");
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g") {
       e.preventDefault();
       this.pageInput.focus();
@@ -808,6 +858,9 @@ export class ReaderView {
   async destroy(): Promise<void> {
     clearTimeout(this.saveTimer);
     clearTimeout(this.dwellTimer);
+    clearTimeout(this.indexTimer);
+    this.indexer?.stop();
+    this.searchPanel?.destroy();
     if (this.focusOn) this.setFocus(false, true);
     window.removeEventListener("popstate", this.onPopState);
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);

@@ -15,6 +15,8 @@ export interface TextRun {
   width: number;
   /** CSS font family hint from the PDF ("sans-serif", "serif", "monospace"…). */
   family?: string;
+  /** PDF font id (to repair broken encodings per font). */
+  font?: string;
 }
 
 export interface CharBox {

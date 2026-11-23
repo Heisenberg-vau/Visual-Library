@@ -794,6 +794,79 @@ test("v0.6.1: a recurring task comes back after you tick it", async () => {
   await page.waitForSelector('[data-testid="shelf"]');
 });
 
+// ---- milestone 7: search, broken encodings, OCR ----
+
+async function openSearch() {
+  if (!(await page.isVisible('[data-testid="sidebar"]'))) await page.click(".tb-panel");
+  await page.click('.tab[data-tab="search"]');
+}
+async function searchFor(q) {
+  await page.fill('[data-testid="doc-search"]', q);
+  await page.press('[data-testid="doc-search"]', "Enter");
+}
+
+test("milestone 7: search the whole book and jump to the hit", async () => {
+  await openBook("650");
+  await openSearch();
+  await page.waitForFunction(() => /sẵn sàng tìm trong 650/.test(document.querySelector('[data-testid="index-status"]').textContent), null, { timeout: 60000 });
+  await searchFor("line 7 of PAGE 123");
+  await page.waitForSelector('[data-testid="search-result"]');
+  assert.equal(await page.locator('[data-testid="search-result"]').count(), 1);
+  await waitRendered(123);
+  assert.equal(await currentPage(), 123);
+  assert.ok(await page.locator('.page-slot[data-page="123"] .search-hit').count() >= 1, "hit outlined on the page");
+  await shot("22-search");
+  await page.click(".tb-panel");
+  await backToShelf();
+});
+
+test("milestone 7: a PDF with a broken font encoding becomes searchable", async () => {
+  await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/garbled.pdf`]);
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /Đã thêm|đã có/.test(t.textContent)));
+  await cards().filter({ hasText: "garbled" }).click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  await openSearch();
+  await page.waitForFunction(() => /sẵn sàng/.test(document.querySelector('[data-testid="index-status"]').textContent), null, { timeout: 30000 });
+  await searchFor("combustion chamber");
+  await page.waitForSelector('[data-testid="search-result"]');
+  assert.match(await page.textContent('[data-testid="search-result"]'), /combustion chamber/i);
+  await page.click(".tb-panel");
+  await backToShelf();
+});
+
+test("milestone 7: scanned pages are OCR'd in the background, then searchable and highlightable", async () => {
+  await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/scanned.pdf`]);
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("scanned")));
+  await cards().filter({ hasText: "scanned" }).click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  await openSearch();
+  const t0 = Date.now();
+  await page.waitForFunction(() => /Đã OCR 2 trang/.test(document.querySelector('[data-testid="index-status"]').textContent), null, { timeout: 180000 });
+  console.log(`  OCR of 2 scanned pages: ${Date.now() - t0} ms`);
+  await searchFor("nozzle guide vanes");
+  await page.waitForSelector('[data-testid="search-result"]');
+  assert.equal(await page.getAttribute('[data-testid="search-result"]', "data-page"), "2");
+  await searchFor("flame tube");
+  await page.waitForSelector('[data-testid="search-result"][data-page="1"]');
+  await page.click('[data-testid="search-result"][data-page="1"]');
+  await shot("23-ocr-hit");
+  // Highlighter snaps to OCR'd words on the scan.
+  await page.click(".tb-panel");
+  await gotoPage(1);
+  const hitBox = await page.locator('.page-slot[data-page="1"] .search-hit').first().boundingBox();
+  const slot = await page.locator(`${BOOK} .page-slot[data-page="1"]`).boundingBox();
+  await tool("highlighter");
+  const fy = (hitBox.y + hitBox.height / 2 - slot.y) / slot.height;
+  const fx0 = (hitBox.x - slot.x) / slot.width;
+  const fx1 = (hitBox.x + hitBox.width - slot.x) / slot.width;
+  await penStroke(1, [[fx0 + 0.005, fy - 0.004], [fx1 - 0.005, fy + 0.004]]);
+  const [hl] = (await strokesOn(1)).filter((x) => x.tool === "highlighter");
+  assert.ok(hl && hl.rects, "highlight snapped to OCR words");
+  await tool("pen");
+  await shot("24-ocr-highlight");
+  await backToShelf();
+});
+
 test("works offline after the first visit", async () => {
   await page.waitForFunction(async () => (await navigator.serviceWorker?.getRegistration())?.active, null, { timeout: 20000 });
   await page.reload(); // let the service worker control the page
@@ -808,9 +881,10 @@ test("works offline after the first visit", async () => {
 });
 
 test("200 MB file imports and reads smoothly", { skip: !process.env.HEAVY || !existsSync(`${FIX}/heavy-200mb.pdf`) }, async () => {
+  const n0 = await cards().count();
   const t0 = Date.now();
   await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/heavy-200mb.pdf`]);
-  await page.waitForFunction(() => document.querySelectorAll('[data-testid="book-card"]').length === 3, null, { timeout: 180000 });
+  await page.waitForFunction((k) => document.querySelectorAll('[data-testid="book-card"]').length === k, n0 + 1, { timeout: 180000 });
   const importMs = Date.now() - t0;
   const t1 = Date.now();
   await openBook("heavy");

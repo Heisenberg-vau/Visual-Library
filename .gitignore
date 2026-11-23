@@ -5,3 +5,4 @@ tests/fixtures/*.pdf
 tests/e2e/out
 *.log
 scratch
+public/tesseract

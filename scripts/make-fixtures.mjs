@@ -95,7 +95,49 @@ async function heavyBook(file, targetMB = 200) {
   console.log("wrote", file, pages, "pages");
 }
 
+/** A "scanned" book: each page is only an image of printed text (no text layer). */
+async function scannedBook(file) {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome", args: ["--no-sandbox"] });
+  const page = await browser.newPage({ viewport: { width: 1240, height: 1754 } });
+  const texts = [
+    ["Chapter 7 Combustion", "The combustion chamber must burn a large quantity of fuel supplied through the burners.", "Flame tube cooling air enters through holes in the liner wall."],
+    ["Chapter 8 Turbine", "The turbine extracts energy from the hot gas stream to drive the compressor.", "Nozzle guide vanes direct the gas onto the turbine blades."],
+  ];
+  const doc = await PDFDocument.create();
+  for (const [title, ...lines] of texts) {
+    await page.setContent(`<html><body style="margin:0;background:#fff;font-family:'DejaVu Serif',Georgia,serif;color:#111">
+      <div style="padding:120px 110px"><h1 style="font-size:58px;margin:0 0 50px">${title}</h1>
+      ${lines.map((l) => `<p style="font-size:34px;line-height:1.5;margin:0 0 30px">${l}</p>`).join("")}</div></body></html>`);
+    const png = await page.screenshot({ type: "png" });
+    const img = await doc.embedPng(png);
+    const p = doc.addPage([595, 842]);
+    p.drawImage(img, { x: 0, y: 0, width: 595, height: 842 });
+  }
+  await browser.close();
+  writeFileSync(file, await doc.save());
+  console.log("wrote", file);
+}
+
+/** Text whose codes are shifted by -29, as broken subset fonts produce. */
+async function garbledBook(file) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const lines = [
+    "the combustion chamber must burn a large quantity of fuel",
+    "supplied through the fuel nozzles with the air from the compressor",
+    "and release the heat in such a manner that the air is expanded",
+  ];
+  const shift = (t) => [...t].map((c) => (c === " " ? " " : String.fromCharCode(c.charCodeAt(0) - 29))).join("");
+  const p = doc.addPage([595, 842]);
+  lines.forEach((l, i) => p.drawText(shift(l), { x: 50, y: 760 - i * 24, size: 13, font }));
+  writeFileSync(file, await doc.save());
+  console.log("wrote", file);
+}
+
 await textBook(3, `${OUT}/small.pdf`);
+await scannedBook(`${OUT}/scanned.pdf`);
+await garbledBook(`${OUT}/garbled.pdf`);
 await textBook(650, `${OUT}/book-650.pdf`, { landscapeAt: [300] });
 writeFileSync(`${OUT}/fake.pdf`, "this is not a pdf at all");
 if (process.argv.includes("--heavy")) await heavyBook(`${OUT}/heavy-200mb.pdf`);

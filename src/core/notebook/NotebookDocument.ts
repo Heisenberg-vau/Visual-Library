@@ -1,5 +1,5 @@
 import { PATTERN_SPACING, type PaperPattern } from "../annotations/types";
-import type { PagedDocument } from "../pdf/PagedDocument";
+import type { PagedDocument, TextQuality } from "../pdf/PagedDocument";
 import type { CharBox } from "../text/textGeometry";
 import type { OutlineNode, PageSize } from "../types";
 
@@ -76,6 +76,11 @@ export class NotebookDocument implements PagedDocument {
 
   async textChars(): Promise<CharBox[]> {
     return [];
+  }
+
+  /** Notebooks are handwriting: nothing to index or OCR. */
+  async textQuality(): Promise<TextQuality> {
+    return "ok";
   }
 
   async displayTransform(): Promise<[number, number, number, number, number, number]> {

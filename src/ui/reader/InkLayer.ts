@@ -82,6 +82,8 @@ export class InkLayer implements SlotHooks {
   /** Strokes finishing (text snapping is async); keeps the live path visible. */
   private pending: Promise<void> = Promise.resolve();
   private tap: { id: number; x: number; y: number; t: number } | null = null;
+  /** Search hits to outline (page -> flat x,y,w,h rects); not saved, not exported. */
+  private marks = new Map<number, number[]>();
 
   constructor(
     private readonly scroller: PageScroller,
@@ -156,6 +158,14 @@ export class InkLayer implements SlotHooks {
 
   // ---- drawing --------------------------------------------------------
 
+  /** Shows search hits on a page (replaces previous marks everywhere). */
+  setMarks(page: number, rects: number[]): void {
+    const old = [...this.marks.keys()];
+    this.marks.clear();
+    if (rects.length) this.marks.set(page, rects);
+    for (const p of new Set([...old, page])) this.redraw(p);
+  }
+
   redraw(page: number): void {
     const s = this.slots.get(page);
     if (s) this.paint(s);
@@ -169,6 +179,12 @@ export class InkLayer implements SlotHooks {
       if (skip?.has(st.id)) continue;
       if (st.tool === "highlighter") hl += strokeSvg(st);
       else ink += strokeSvg(st);
+    }
+    const m = this.marks.get(s.index);
+    if (m) {
+      for (let i = 0; i + 3 < m.length; i += 4) {
+        ink += `<rect class="search-hit" x="${m[i] - 1.5}" y="${m[i + 1] - 1.5}" width="${m[i + 2] + 3}" height="${m[i + 3] + 3}" rx="2"/>`;
+      }
     }
     (s.hl.firstChild as SVGGElement).innerHTML = hl;
     (s.ink.firstChild as SVGGElement).innerHTML = ink;

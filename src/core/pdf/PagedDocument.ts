@@ -1,6 +1,8 @@
 import type { CharBox } from "../text/textGeometry";
 import type { OutlineNode, PageSize } from "../types";
 
+export type TextQuality = "ok" | "fixed" | "garbled" | "empty";
+
 /**
  * What the UI needs from any paged document. PDF implements it today; the
  * .docx importer (milestone 6) converts Word files into the same shape, so the
@@ -41,5 +43,11 @@ export interface PagedDocument {
 
   /** Character boxes of page i (empty for scanned pages without text). */
   textChars(i: number): Promise<CharBox[]>;
+
+  /**
+   * How usable page i's own text is: "ok", "fixed" (broken font encoding
+   * repaired), "garbled" (needs OCR) or "empty" (a scan: needs OCR).
+   */
+  textQuality(i: number): Promise<TextQuality>;
   destroy(): Promise<void>;
 }

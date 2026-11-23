@@ -16,6 +16,8 @@ import { DEFAULT_TOOLS, type ToolState } from "../ui/reader/InkLayer";
 import { ReaderView, type NotebookHost } from "../ui/reader/ReaderView";
 import { StudyStore } from "../core/study/StudyStore";
 import { ReadingStore } from "../core/study/reading";
+import { OcrEngine } from "../core/text/ocr";
+import { TextIndexStore } from "../core/text/TextIndexStore";
 import { dayKey } from "../core/study/dates";
 import type { DailyGoal } from "../ui/library/GoalRing";
 import { Ambience } from "../ui/study/Ambience";
@@ -47,6 +49,8 @@ export class App {
   private meta: MetaStore;
   readonly studyStore = new StudyStore();
   readonly readingStore = new ReadingStore();
+  readonly textStore = new TextIndexStore();
+  readonly ocr = new OcrEngine();
   readonly ambience: Ambience;
   readonly study: StudySession;
   private planner: PlannerView | null = null;
@@ -57,6 +61,7 @@ export class App {
     this.library = new LibraryService(meta, createFileStore(), pdfInspector);
     this.library.onDelete((id) => this.inkStore.deleteBook(id));
     this.library.onDelete((id) => this.readingStore.deleteBook(id));
+    this.library.onDelete((id) => this.textStore.deleteBook(id));
     this.ambience = new Ambience(meta);
     this.study = new StudySession(
       meta,
@@ -187,6 +192,7 @@ export class App {
         ambience: this.ambience,
         onPageRead: (p) => void this.readingStore.markRead(book.id, p, dayKey(new Date())),
         onBookmarks: (pages) => void this.library.setBookmarks(book.id, pages),
+        textIndex: { store: this.textStore, ocr: this.ocr },
       });
       this.study.bookId = book.id;
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);

@@ -202,6 +202,14 @@ export class PageScroller {
     this.update();
   }
 
+  /** Brings a point of a page (PDF points) into view, about a third from the top. */
+  goToPoint(index: number, yPts: number): void {
+    const i = clamp(index, 0, this.doc.numPages - 1);
+    const top = this.layout.tops[i] + yPts * this.layout.scale - this.el.clientHeight * 0.3;
+    this.el.scrollTo({ top: Math.max(0, top) });
+    this.update();
+  }
+
   private schedule(): void {
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => {

@@ -14,7 +14,8 @@ import { layoutChars, type CharBox, type TextRun } from "../text/textGeometry";
 import { LruCache } from "../util/lru";
 import type { OutlineNode, PageSize } from "../types";
 import { UserFacingError } from "../types";
-import type { PagedDocument } from "./PagedDocument";
+import type { PagedDocument, TextQuality } from "./PagedDocument";
+import { findShift, looksGarbled, shiftText } from "../text/encoding";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -97,7 +98,9 @@ export class PdfDocument implements PagedDocument {
   private fallback: PageSize = { width: 595, height: 842 };
   private knownCount = 0;
   metaTitle: string | null = null;
-  private textCache = new LruCache<number, Promise<CharBox[]>>(40);
+  private textCache = new LruCache<number, Promise<{ chars: CharBox[]; quality: TextQuality }>>(40);
+  /** Repairs found per PDF font, reused on later pages. */
+  private fontShift = new Map<string, number | null>();
 
   constructor(
     private readonly pdf: PDFDocumentProxy,
@@ -233,16 +236,24 @@ export class PdfDocument implements PagedDocument {
     return page.getViewport({ scale: 1 }).transform as [number, number, number, number, number, number];
   }
 
-  textChars(i: number): Promise<CharBox[]> {
+  private text(i: number): Promise<{ chars: CharBox[]; quality: TextQuality }> {
     let p = this.textCache.get(i);
     if (!p) {
-      p = this.loadText(i).catch(() => []);
+      p = this.loadText(i).catch(() => ({ chars: [], quality: "empty" as TextQuality }));
       this.textCache.set(i, p);
     }
     return p;
   }
 
-  private async loadText(i: number): Promise<CharBox[]> {
+  async textChars(i: number): Promise<CharBox[]> {
+    return (await this.text(i)).chars;
+  }
+
+  async textQuality(i: number): Promise<TextQuality> {
+    return (await this.text(i)).quality;
+  }
+
+  private async loadText(i: number): Promise<{ chars: CharBox[]; quality: TextQuality }> {
     const page = await this.pdf.getPage(i + 1);
     const vp = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
@@ -256,9 +267,34 @@ export class PdfDocument implements PagedDocument {
         m,
         width: it.dir === "ttb" ? it.height : it.width,
         family: styles[it.fontName]?.fontFamily,
+        font: it.fontName,
       });
     }
-    return layoutChars(runs, measureCharWidth);
+    if (!runs.some((r) => r.str.trim())) return { chars: [], quality: "empty" };
+    // Repair fonts whose codes are shifted (copy/paste gives other letters).
+    let fixed = false;
+    const byFont = new Map<string, TextRun[]>();
+    for (const r of runs) {
+      const k = r.font ?? "";
+      const l = byFont.get(k) ?? [];
+      l.push(r);
+      byFont.set(k, l);
+    }
+    for (const [font, list] of byFont) {
+      const sample = list.map((r) => r.str).join(" ");
+      let d = this.fontShift.get(font);
+      if (d === undefined) {
+        d = sample.replace(/\s/g, "").length >= 30 && looksGarbled(sample) ? findShift(sample) : null;
+        if (d !== null || sample.length >= 200) this.fontShift.set(font, d);
+      }
+      if (d) {
+        for (const r of list) r.str = shiftText(r.str, d);
+        fixed = true;
+      }
+    }
+    const all = runs.map((r) => r.str).join(" ");
+    const quality: TextQuality = looksGarbled(all) ? "garbled" : fixed ? "fixed" : "ok";
+    return { chars: layoutChars(runs, measureCharWidth), quality };
   }
 
   /** Small JPEG of page 1 for the bookshelf. */
