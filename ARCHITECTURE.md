@@ -36,6 +36,15 @@ src/
   or x > page width. `InkModel` holds undo/redo and debounced saving;
   `ui/reader/InkLayer` draws it on three canvases per visible page
   (highlighter blended *multiply*, pen, live stroke).
+- **Text-aware marking** (`core/text`): pdf.js text runs become character
+  boxes (glyph widths measured per font family). The highlighter covers the
+  characters its stroke passes over (any direction); the underline sits a fixed
+  distance under the baseline. Scans without text fall back to freehand.
+- **Export** (`core/export`): `ExportService` builds one job per page (ink,
+  display→PDF matrix from pdf.js, margins) on the main thread; a Web Worker
+  runs pdf-lib to draw the same path commands the screen uses (`path.ts`) into
+  a NEW file. The original's content is wrapped in q…Q, highlights use an
+  ExtGState with Multiply blend, widened pages get larger Media/CropBoxes.
 - **Input rules:** pen (and mouse, for laptops) writes; fingers only scroll and
   pinch. Stylus touches are `preventDefault`-ed so the page never scrolls under
   the pen, and touches are ignored for 250 ms after pen activity (palm).

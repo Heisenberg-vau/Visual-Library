@@ -87,6 +87,7 @@ export class App {
         onPosition: (page, zoom) => void this.library.savePosition(book.id, page, zoom),
         onToolsChange: (t) => void this.meta.setSetting("tools", t),
         onMargins: (m) => void this.library.setMargins(book.id, m),
+        getFile: () => this.library.readFile(book.id),
       });
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);
       this.libraryView.el.remove();

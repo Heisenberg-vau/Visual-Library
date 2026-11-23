@@ -5,6 +5,7 @@ import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
 import { h, iconButton } from "../dom";
 import { popupMenu, toast } from "../feedback";
+import { openExportDialog } from "./ExportDialog";
 import { InkLayer, type Tool, type ToolState } from "./InkLayer";
 import { OutlinePanel } from "./OutlinePanel";
 import { PageScroller } from "./PageScroller";
@@ -19,6 +20,7 @@ export interface ReaderDeps {
   onPosition: (page: number, zoom: number) => void;
   onToolsChange: (t: ToolState) => void;
   onMargins: (m: Margins) => void;
+  getFile: () => Promise<File>;
 }
 
 const PEN_COLORS = ["#1d2430", "#1f5fbf", "#d03a2f", "#1e8a4c", "#7b3fb5", "#e07a12"];
@@ -150,7 +152,9 @@ export class ReaderView {
     this.redoBtn.dataset.testid = "redo";
     const marginBtn = iconButton("margin", "Nới rộng lề để ghi chú", () => this.openMargins(marginBtn));
     marginBtn.dataset.testid = "margin-btn";
-    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, marginBtn);
+    const exportBtn = iconButton("exportPdf", "Xuất bản có ghi chú (PDF mới)", () => void this.exportPdf());
+    exportBtn.dataset.testid = "export-btn";
+    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, marginBtn, exportBtn);
 
     const toolbar = h(
       "header",
@@ -285,6 +289,16 @@ export class ReaderView {
         run: () => apply({ ...cur, pattern: p.p }),
       })),
     ]);
+  }
+
+  private async exportPdf(): Promise<void> {
+    await openExportDialog({
+      doc: this.deps.doc,
+      ink: this.deps.ink,
+      margins: this.scroller.currentMargins,
+      title: this.deps.book.title,
+      getFile: this.deps.getFile,
+    });
   }
 
   private undo(): void {

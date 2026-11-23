@@ -412,3 +412,18 @@ li.collapsed > .outline-row .outline-toggle::before { transform: translateY(-50%
   .reader-toolbar .reader-title { display: none; }
   .tool-group { border-left: 0; margin-right: auto; }
 }
+
+/* export dialog */
+.opt-group { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px 10px; margin: 0 0 12px; }
+.opt-group legend { font-weight: 600; font-size: 14px; padding: 0 6px; }
+.radio { display: flex; gap: 10px; align-items: flex-start; padding: 8px 2px; cursor: pointer; font-size: 15px; }
+.radio input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--brand); flex: none; }
+.radio small { display: block; color: var(--ink-soft); font-size: 12.5px; margin-top: 2px; }
+.export-phase { font-weight: 600; margin-bottom: 10px; }
+.bar.big { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.bar.big .fill { display: block; height: 100%; width: 0; background: var(--brand); transition: width 0.25s; }
+.small { font-size: 13px; }
+.export-done { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.ok-mark { width: 40px; height: 40px; border-radius: 50%; background: #e3f3e8; color: #1e8a4c; display: grid; place-items: center; flex: none; }
+.error-text { color: var(--danger); }
+a.btn { text-decoration: none; }

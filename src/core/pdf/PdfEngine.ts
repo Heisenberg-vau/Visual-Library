@@ -228,6 +228,11 @@ export class PdfDocument implements PagedDocument {
     return walk(raw as unknown as RawItem[]);
   }
 
+  async displayTransform(i: number): Promise<[number, number, number, number, number, number]> {
+    const page = await this.pdf.getPage(i + 1);
+    return page.getViewport({ scale: 1 }).transform as [number, number, number, number, number, number];
+  }
+
   textChars(i: number): Promise<CharBox[]> {
     let p = this.textCache.get(i);
     if (!p) {

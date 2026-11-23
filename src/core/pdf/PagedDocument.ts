@@ -33,6 +33,12 @@ export interface PagedDocument {
 
   getOutline(): Promise<OutlineNode[]>;
 
+  /**
+   * Matrix from PDF user space to the page's display space (points, y down,
+   * rotation applied) at scale 1. Used to export ink back into the PDF.
+   */
+  displayTransform(i: number): Promise<[number, number, number, number, number, number]>;
+
   /** Character boxes of page i (empty for scanned pages without text). */
   textChars(i: number): Promise<CharBox[]>;
   destroy(): Promise<void>;

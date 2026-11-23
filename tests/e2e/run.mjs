@@ -6,6 +6,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { PDFDocument } from "pdf-lib";
 
 const PORT = 4173;
 const URL = `http://localhost:${PORT}/`;
@@ -158,12 +161,11 @@ test("table of contents navigates to a chapter", async () => {
 test("thumbnails show the current page and navigate", async () => {
   await page.click('.tab[data-tab="thumbs"]');
   await page.waitForSelector(".thumb.current .thumb-canvas", { timeout: 15000 });
-  const cur = await page.getAttribute(".thumb.current", "data-page");
-  assert.equal(Number(cur), await currentPage());
+  await page.waitForFunction(() => Number(document.querySelector(".thumb.current")?.dataset.page) === window.__reader.scrollerForTests.currentPage, null, { timeout: 5000 });
   const target = page.locator(".thumb").filter({ has: page.locator(".thumb-canvas") }).last();
   const n = Number(await target.getAttribute("data-page"));
   await target.click();
-  assert.equal(await currentPage(), n);
+  await page.waitForFunction((k) => window.__reader.scrollerForTests.currentPage === k, n, { timeout: 5000 });
   await shot("05-thumbs");
   await page.click(".tb-panel");
 });
@@ -393,6 +395,80 @@ test("milestone 3: widened margin gives space to write beside the page", async (
   await page.click('[data-testid="margin-btn"]');
   await page.locator(".menu-item", { hasText: "Không nới lề" }).click();
   await backToShelf();
+});
+
+// ---- milestone 4: export an annotated copy ----
+
+async function exportVia(scopeLabel) {
+  await page.click('[data-testid="export-btn"]');
+  await page.waitForSelector('[data-testid="export-dialog"]');
+  await page.locator('[data-testid="export-dialog"] .radio', { hasText: scopeLabel }).click();
+  const t0 = Date.now();
+  await page.click('[data-testid="export-start"]');
+  await page.waitForSelector('[data-testid="export-save"]', { timeout: 120000 });
+  const ms = Date.now() - t0;
+  const [dl] = await Promise.all([page.waitForEvent("download"), page.click('[data-testid="export-save"]')]);
+  const path = `${SHOTS}/${dl.suggestedFilename()}`;
+  await dl.saveAs(path);
+  await page.locator('[data-testid="export-dialog"] .btn', { hasText: "Đóng" }).click();
+  return { path, ms, name: dl.suggestedFilename() };
+}
+
+test("milestone 4: export only annotated pages to a new PDF", async () => {
+  await openBook("650");
+  const { path, ms, name } = await exportVia("Chỉ các trang có ghi chú");
+  assert.equal(name, "Test book 650 pages (ghi chu).pdf");
+  const doc = await PDFDocument.load(readFileSync(path));
+  assert.equal(doc.getPageCount(), 2, "pages 10 and 11");
+  const p10 = doc.getPage(0).getMediaBox();
+  const p11 = doc.getPage(1).getMediaBox();
+  assert.ok(p10.width > 595 + 20, `page with a margin note is widened (${p10.width})`);
+  assert.equal(p11.width, 595);
+  console.log(`  export (2 pages of 650): ${ms} ms`);
+});
+
+test("milestone 4: the original stored copy is byte-for-byte unchanged", async () => {
+  await backToShelf();
+  const id = await cards().filter({ hasText: "650" }).first().getAttribute("data-id");
+  const stored = await page.evaluate(async (bookId) => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle("originals");
+    const f = await (await dir.getFileHandle(bookId)).getFile();
+    const d = await crypto.subtle.digest("SHA-256", await f.arrayBuffer());
+    return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }, id);
+  const fixture = createHash("sha256").update(readFileSync(`${FIX}/book-650.pdf`)).digest("hex");
+  assert.equal(stored, fixture);
+});
+
+test("milestone 4: whole-document export, then the result opens with the notes baked in", async () => {
+  await openBook("650");
+  const { path, ms } = await exportVia("Toàn bộ tài liệu");
+  const doc = await PDFDocument.load(readFileSync(path));
+  assert.equal(doc.getPageCount(), 650);
+  console.log(`  export (all 650 pages): ${ms} ms`);
+  await backToShelf();
+  await page.setInputFiles('[data-testid="file-input"]', [path]);
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("ghi chú")), null, { timeout: 60000 });
+  await cards().filter({ hasText: "ghi chú" }).click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  await gotoPage(11);
+  await page.waitForTimeout(500);
+  await shot("12-exported-page11");
+  await gotoPage(10);
+  await page.waitForTimeout(500);
+  await shot("13-exported-page10");
+  // The exported book has no app-side ink: everything is inside the PDF now.
+  assert.equal((await strokesOn(10)).length, 0);
+  assert.ok((await inkOf(10)) > 0.005);
+  const box = await page.locator('.page-slot[data-page="10"]').boundingBox();
+  const box9 = await page.locator('.page-slot[data-page="9"]').boundingBox();
+  assert.ok(box.width > box9.width * 1.2, "page with a margin note is wider in the exported file");
+  await backToShelf();
+  await cards().filter({ hasText: "ghi chú" }).locator(".card-more").click();
+  await page.locator(".menu-item", { hasText: "Xóa" }).click();
+  await page.locator(".modal .btn-primary").click();
+  await page.waitForFunction(() => ![...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("ghi chú")));
 });
 
 test("works offline after the first visit", async () => {
