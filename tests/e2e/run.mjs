@@ -872,6 +872,61 @@ test("milestone 7: scanned pages are OCR'd in the background, then searchable an
   await backToShelf();
 });
 
+// ---- milestone 8: Word documents ----
+
+test("milestone 8: a .docx is laid out into pages, searchable without OCR, and exports", async () => {
+  const t0 = Date.now();
+  await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/bao-cao.docx`, `${FIX}/old.doc`]);
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("Báo cáo động cơ")), null, { timeout: 120000 });
+  console.log(`  .docx import + layout: ${Date.now() - t0} ms`);
+  await page.waitForSelector(".toast-error");
+  assert.match(await page.locator(".toast-error").first().textContent(), /\.docx/, "old .doc gets a helpful message");
+  const card = cards().filter({ hasText: "Báo cáo động cơ" });
+  assert.equal(await card.locator('[data-testid="word-chip"]').count(), 1);
+  const id = await card.getAttribute("data-id");
+  const meta = await page.evaluate((bid) => window.__app.library.get(bid), id);
+  assert.ok(meta.pageCount >= 3, `text flows over several pages (got ${meta.pageCount})`);
+  // The original .docx is kept as it was.
+  const orig = await page.evaluate(async (bid) => { const f = await window.__app.library.readOriginal(bid); const b = new Uint8Array(await f.slice(0, 2).arrayBuffer()); return { size: f.size, magic: String.fromCharCode(...b) }; }, id);
+  assert.equal(orig.magic, "PK");
+  assert.equal(orig.size, readFileSync(`${FIX}/bao-cao.docx`).length);
+  // Words come from the layout: indexing finishes with nothing to OCR.
+  await page.waitForFunction((bid) => { const s = window.__app.index.statusOf(bid); return s && s.scanned === s.total; }, id, { timeout: 60000 });
+  assert.equal((await page.evaluate((bid) => window.__app.index.statusOf(bid), id)).ocrTotal, 0);
+
+  await card.click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  await waitRendered(1);
+  assert.ok((await inkOf(1)) > 0.01, "page 1 shows the text");
+  await shot("25-docx-page1");
+  await openSearch();
+  await searchFor("Phụ lục tuabin");
+  await page.waitForSelector('[data-testid="search-result"]');
+  const last = String(meta.pageCount);
+  assert.equal(await page.getAttribute('[data-testid="search-result"]', "data-page"), last, "explicit page break starts the last page");
+  await searchFor("Đoạn 14");
+  await page.waitForSelector('[data-testid="search-result"]');
+  const p14 = Number(await page.getAttribute('[data-testid="search-result"]', "data-page"));
+  assert.ok(p14 >= 2 && p14 < meta.pageCount, "later paragraphs land on later pages");
+  await page.click('[data-testid="search-result"]');
+  await page.click(".tb-panel");
+  await waitRendered(p14);
+  await shot("26-docx-hit");
+  // Highlighter snaps to the Word text.
+  const hitBox = await page.locator(`.page-slot[data-page="${p14}"] .search-hit`).first().boundingBox();
+  const slot = await page.locator(`${BOOK} .page-slot[data-page="${p14}"]`).boundingBox();
+  await tool("highlighter");
+  const fy = (hitBox.y + hitBox.height / 2 - slot.y) / slot.height;
+  await penStroke(p14, [[(hitBox.x - slot.x) / slot.width + 0.003, fy - 0.003], [(hitBox.x + hitBox.width - slot.x) / slot.width - 0.003, fy + 0.003]]);
+  const [hl] = (await strokesOn(p14)).filter((x) => x.tool === "highlighter");
+  assert.ok(hl && hl.rects, "highlight snapped to the Word text");
+  await tool("pen");
+  const { path, name } = await exportVia("Chỉ các trang có ghi chú");
+  assert.equal(name, "Bao cao dong co (ghi chu).pdf");
+  assert.equal((await PDFDocument.load(readFileSync(path))).getPageCount(), 1);
+  await backToShelf();
+});
+
 test("works offline after the first visit", async () => {
   await page.waitForFunction(async () => (await navigator.serviceWorker?.getRegistration())?.active, null, { timeout: 20000 });
   await page.reload(); // let the service worker control the page

@@ -149,7 +149,7 @@ describe("LibraryService", () => {
 
   it("rejects non-PDF files with a readable message", async () => {
     const [r] = await svc.importFiles([new File(["hello"], "note.pdf")]);
-    expect(r).toMatchObject({ status: "error", message: "Không phải file PDF." });
+    expect(r).toMatchObject({ status: "error", message: "Chỉ mở được file PDF hoặc Word (.docx)." });
   });
 
   it("cleans up the stored copy when a file is broken", async () => {

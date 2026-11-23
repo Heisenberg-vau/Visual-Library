@@ -7,7 +7,7 @@ export interface PageText {
   bookId: string;
   page: number;
   /** Where the words came from. "pending" = waiting for OCR. */
-  source: "pdf" | "fixed" | "ocr" | "pending" | "none";
+  source: "pdf" | "fixed" | "ocr" | "pending" | "none" | "docx";
   words: WordBox[];
   updatedAt: number;
 }

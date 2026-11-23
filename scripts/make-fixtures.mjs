@@ -3,6 +3,7 @@
 //   node scripts/make-fixtures.mjs --heavy    -> also a ~200 MB scan-like PDF
 import { mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { deflateSync } from "node:zlib";
 import {
   PDFDocument, PDFName, PDFHexString, PDFNumber, PDFNull, StandardFonts, rgb,
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject, setTextRenderingMode, TextRenderingMode,
@@ -147,9 +148,78 @@ async function garbledBook(file) {
   console.log("wrote", file);
 }
 
+/** A solid-colour PNG (no image library needed). */
+function solidPng(w, h, [r, g, b]) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buf) => {
+    let c = 0xffffffff;
+    for (const x of buf) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const c = Buffer.alloc(4);
+    c.writeUInt32BE(crc(td));
+    return Buffer.concat([len, td, c]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w }, () => [r, g, b]).flat())]);
+  const raw = Buffer.concat(Array.from({ length: h }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+/**
+ * A Word report: Vietnamese text long enough to flow over several pages
+ * (Word stores no pages), a table, a picture and an explicit page break.
+ */
+async function wordDoc(file) {
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, ImageRun, PageBreak, WidthType } = await import("docx");
+  const para = (i) =>
+    new Paragraph({
+      spacing: { after: 160 },
+      children: [new TextRun({ text: `Đoạn ${i}. Buồng đốt phải đốt cháy một lượng lớn nhiên liệu được cung cấp qua các vòi phun, cùng với không khí từ máy nén, và giải phóng nhiệt sao cho không khí giãn nở và tăng tốc thành dòng khí đều. `.repeat(3), size: 24, font: "Arial" })],
+    });
+  const doc = new Document({
+    creator: "fixtures",
+    title: "Báo cáo động cơ",
+    sections: [
+      {
+        properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } },
+        children: [
+          new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: "Báo cáo động cơ phản lực", font: "Arial" })] }),
+          ...Array.from({ length: 14 }, (_, i) => para(i + 1)),
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [["Bộ phận", "Nhiệt độ"], ["Máy nén", "600 độ"], ["Tuabin", "1400 độ"]].map(
+              (r) => new TableRow({ children: r.map((c) => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: c, font: "Arial", size: 24 })] })] })) }),
+            ),
+          }),
+          new Paragraph({ children: [new ImageRun({ type: "png", data: solidPng(240, 120, [30, 120, 200]), transformation: { width: 240, height: 120 } })] }),
+          new Paragraph({ children: [new PageBreak()] }),
+          new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: "Phụ lục tuabin khí", font: "Arial" })] }),
+          para(99),
+        ],
+      },
+    ],
+  });
+  writeFileSync(file, await Packer.toBuffer(doc));
+  console.log("wrote", file);
+}
+
 await textBook(3, `${OUT}/small.pdf`);
 await scannedBook(`${OUT}/scanned.pdf`);
 await garbledBook(`${OUT}/garbled.pdf`);
 await textBook(650, `${OUT}/book-650.pdf`, { landscapeAt: [300] });
+await wordDoc(`${OUT}/bao-cao.docx`);
+writeFileSync(`${OUT}/old.doc`, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, ...randomBytes(504)]));
 writeFileSync(`${OUT}/fake.pdf`, "this is not a pdf at all");
 if (process.argv.includes("--heavy")) await heavyBook(`${OUT}/heavy-200mb.pdf`);

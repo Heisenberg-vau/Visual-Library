@@ -1,4 +1,5 @@
 import type { BookMeta, Category } from "../types";
+import type { WordBox } from "../text/words";
 import { compareNames, mergeTags, sameTag, subtreeIds } from "../library/shelves";
 import { UserFacingError } from "../types";
 import type { FileStore } from "./FileStore";
@@ -6,14 +7,26 @@ import type { MetaStore } from "./MetaStore";
 
 /** What importing needs to learn about a file. Injected so tests can fake it. */
 export interface DocInspector {
-  accepts(file: File): Promise<boolean>;
-  inspect(file: File): Promise<{
+  /** true/"pdf" = a PDF, "docx" = a Word document, false = not supported. */
+  accepts(file: File): Promise<boolean | "pdf" | "docx">;
+  inspect(
+    file: File,
+    onProgress?: (fraction: number) => void,
+    kind?: "pdf" | "docx",
+  ): Promise<{
     pageCount: number;
     fingerprint: string;
     title: string | null;
     cover: Blob | null;
+    /** Reading copy for formats that are converted (Word → PDF). */
+    converted?: Blob;
+    /** Words per page of the converted copy (no OCR needed). */
+    pageWords?: WordBox[][];
   }>;
 }
+
+/** Where the untouched original of a converted book (e.g. the .docx) is kept. */
+export const originalKey = (id: string) => `${id}.orig`;
 
 export type ImportResult =
   | { status: "added"; book: BookMeta }
@@ -85,22 +98,33 @@ export class LibraryService {
   ): Promise<ImportResult> {
     const report = (phase: ImportProgress["phase"], fraction: number) =>
       onProgress?.({ fileName: file.name, index, total, phase, fraction });
-    if (!(await this.inspector.accepts(file))) {
-      return { status: "error", fileName: file.name, message: "Không phải file PDF." };
+    const kind = await this.inspector.accepts(file);
+    if (!kind) {
+      const message = /\.doc$/i.test(file.name)
+        ? "File Word đời cũ (.doc) chưa mở được – hãy mở bằng Word, lưu lại thành .docx rồi nhập lại."
+        : "Chỉ mở được file PDF hoặc Word (.docx).";
+      return { status: "error", fileName: file.name, message };
     }
     const id = newId();
+    const converted = kind === "docx";
+    // A converted book keeps its original separately; the reading copy is `id`.
+    const key = converted ? originalKey(id) : id;
     try {
       report("copy", 0);
       // Copy first, then inspect the stored copy: the original the user
       // picked is never touched again.
-      await this.files.write(id, file, (done) => report("copy", file.size ? done / file.size : 1));
+      await this.files.write(key, file, (done) => report("copy", file.size ? done / file.size : 1));
       report("inspect", 0);
-      const stored = await this.files.read(id);
-      const info = await this.inspector.inspect(stored);
+      const stored = await this.files.read(key);
+      const info = await this.inspector.inspect(stored, (f) => report("inspect", Math.min(0.99, f)), converted ? "docx" : "pdf");
       const dup = info.fingerprint ? await this.meta.findByFingerprint(info.fingerprint) : undefined;
       if (dup) {
-        await this.files.delete(id);
+        await this.files.delete(key);
         return { status: "duplicate", book: dup };
+      }
+      if (converted) {
+        if (!info.converted) throw new UserFacingError("Không chuyển được file Word này.");
+        await this.files.write(id, info.converted);
       }
       const book: BookMeta = {
         id,
@@ -119,14 +143,18 @@ export class LibraryService {
         margins: { left: 0, right: 0 },
         favorite: false,
         bookmarks: [],
+        ...(converted ? { source: "docx" as const } : {}),
       };
+      // Words of converted pages first, so indexing never OCRs them.
+      for (const fn of this.onImportHooks) await fn(book, { pageWords: info.pageWords });
       await this.meta.put(book);
       if (info.cover) await this.meta.putCover(id, info.cover);
       report("inspect", 1);
-      for (const fn of this.onImportHooks) fn(book);
+      for (const fn of this.onAddedHooks) fn(book);
       return { status: "added", book };
     } catch (e) {
       await this.files.delete(id).catch(() => {});
+      if (converted) await this.files.delete(key).catch(() => {});
       const message =
         e instanceof UserFacingError
           ? e.message
@@ -187,6 +215,7 @@ export class LibraryService {
 
   async delete(id: string): Promise<void> {
     await this.files.delete(id).catch(() => {}); // notebooks have no file
+    await this.files.delete(originalKey(id)).catch(() => {});
     await this.meta.delete(id);
     await this.onDeleteHooks.reduce((p, fn) => p.then(() => fn(id)), Promise.resolve());
   }
@@ -308,10 +337,22 @@ export class LibraryService {
     await this.meta.update(id, { indexDone });
   }
 
-  /** Lets other modules react to a newly imported book (start indexing/OCR). */
-  private onImportHooks: ((book: BookMeta) => void)[] = [];
-  onImport(fn: (book: BookMeta) => void): void {
+  /** Runs before a new book is saved (e.g. to store the words of a converted file). */
+  private onImportHooks: ((book: BookMeta, extra: { pageWords?: WordBox[][] }) => Promise<void>)[] = [];
+  onImport(fn: (book: BookMeta, extra: { pageWords?: WordBox[][] }) => Promise<void>): void {
     this.onImportHooks.push(fn);
+  }
+
+  /** Runs once a new book is in the library (start indexing/OCR). */
+  private onAddedHooks: ((book: BookMeta) => void)[] = [];
+  onAdded(fn: (book: BookMeta) => void): void {
+    this.onAddedHooks.push(fn);
+  }
+
+  /** The untouched original of a converted book (the .docx), or the file itself. */
+  async readOriginal(id: string): Promise<File> {
+    const b = await this.meta.get(id);
+    return this.files.read(b?.source ? originalKey(id) : id);
   }
 
   async setFavorite(id: string, favorite: boolean): Promise<void> {

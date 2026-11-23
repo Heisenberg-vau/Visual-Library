@@ -27,9 +27,27 @@ import { StudySession } from "../ui/study/StudySession";
 
 /** Composition root: builds the layers and switches between screens. */
 
+async function looksLikeDocx(file: Blob & { name?: string }): Promise<boolean> {
+  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+  const zip = head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04;
+  return zip && (/\.docx$/i.test(file.name ?? "") || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+}
+
 const pdfInspector: DocInspector = {
-  accepts: (file) => looksLikePdf(file),
-  async inspect(file) {
+  accepts: async (file) => ((await looksLikePdf(file)) ? "pdf" : (await looksLikeDocx(file)) ? "docx" : false),
+  async inspect(file, onProgress, kind) {
+    if (kind === "docx") {
+      const { convertDocx } = await import("../core/docx/convertDocx");
+      const conv = await convertDocx(file, onProgress);
+      const doc = await openPdf(conv.pdf);
+      try {
+        const cover = await doc.renderCover().catch(() => null);
+        const fingerprint = await fileFingerprint(file);
+        return { pageCount: doc.numPages, fingerprint, title: conv.title, cover, converted: conv.pdf, pageWords: conv.pageWords };
+      } finally {
+        await doc.destroy();
+      }
+    }
     const doc = await openPdf(file);
     try {
       const cover = await doc.renderCover().catch(() => null);
@@ -68,7 +86,13 @@ export class App {
       await this.textStore.deleteBook(id);
     });
     this.index = new IndexService(this.library, this.textStore, this.ocr, async (id) => openPdf(await this.library.readFile(id)));
-    this.library.onImport((b) => {
+    this.library.onImport(async (b, extra) => {
+      if (!extra.pageWords) return;
+      for (let page = 0; page < extra.pageWords.length; page++) {
+        await this.textStore.put({ bookId: b.id, page, source: "docx", words: extra.pageWords[page] });
+      }
+    });
+    this.library.onAdded((b) => {
       if (b.kind === "pdf" && !b.indexDone) this.index.enqueue(b.id);
     });
     this.ambience = new Ambience(meta);

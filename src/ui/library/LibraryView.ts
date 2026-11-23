@@ -56,7 +56,7 @@ export class LibraryView {
   constructor(private readonly deps: LibraryViewDeps) {
     this.fileInput = h("input", {
       type: "file",
-      accept: "application/pdf,.pdf",
+      accept: "application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       multiple: true,
       class: "hidden-input",
       "data-testid": "file-input",
@@ -344,7 +344,7 @@ export class LibraryView {
     let text = "Thử bỏ bớt bộ lọc hoặc từ khóa tìm kiếm.";
     if (this.books.length === 0) {
       title = "Kệ sách đang trống";
-      text = "Bấm “Nhập tài liệu” để thêm file PDF từ máy. File gốc được giữ nguyên, app lưu một bản riêng để đọc offline.";
+      text = "Bấm “Nhập tài liệu” để thêm file PDF hoặc Word (.docx) từ máy. File gốc được giữ nguyên, app lưu một bản riêng để đọc offline.";
     } else if (!this.filterInput.value.trim() && !this.tag && this.view.kind === "shelf") {
       title = "Danh mục này chưa có tài liệu";
       text = "Bấm “Nhập tài liệu” khi đang ở đây để thêm thẳng vào danh mục, hoặc dùng “Chọn” để chuyển tài liệu có sẵn vào.";
@@ -420,7 +420,12 @@ export class LibraryView {
         { class: "card-body" },
         h("h3", { class: "card-title", title: b.title }, b.title),
         showPath ? h("div", { class: "card-path", title: path.map((c) => c.name).join(" › ") }, path.map((c) => c.name).join(" › ")) : null,
-        h("div", { class: "card-meta" }, isNb ? `Vở · ${b.pageCount} trang` : `${b.pageCount} trang · ${formatBytes(b.size)}`),
+        h(
+          "div",
+          { class: "card-meta" },
+          b.source === "docx" ? h("span", { class: "format-chip", "data-testid": "word-chip", title: "Nhập từ file Word (.docx); file gốc được giữ nguyên" }, "Word") : null,
+          isNb ? `Vở · ${b.pageCount} trang` : `${b.pageCount} trang · ${formatBytes(b.size)}`,
+        ),
         tags.length ? h("div", { class: "card-tags" }, ...tags) : null,
         isNb
           ? h("div", { class: "card-progress" }, h("span", { class: "pct" }, b.lastOpenedAt ? `Đang ở trang ${b.lastPage}` : "Chưa mở"))
@@ -524,9 +529,11 @@ export class LibraryView {
     const results = await this.deps.library.importFiles(
       files,
       (p) => {
-        const phase = p.phase === "copy" ? "Đang sao chép" : "Đang đọc";
+        const word = /\.docx$/i.test(p.fileName);
+        const phase = p.phase === "copy" ? "Đang sao chép" : word ? "Đang dàn trang Word" : "Đang đọc";
         label.textContent = `${phase} ${p.fileName} (${p.index + 1}/${p.total})`;
-        const overall = (p.index + (p.phase === "copy" ? p.fraction * 0.8 : 0.8 + p.fraction * 0.2)) / p.total;
+        const copyShare = word ? 0.1 : 0.8;
+        const overall = (p.index + (p.phase === "copy" ? p.fraction * copyShare : copyShare + p.fraction * (1 - copyShare))) / p.total;
         bar.style.width = `${Math.round(overall * 100)}%`;
       },
       target,

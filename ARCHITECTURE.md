@@ -29,7 +29,16 @@ src/
   pages around the viewport; a shared `JobScheduler` renders the visible page
   first and cancels work for pages that scrolled away.
 - **`PagedDocument` abstraction.** The reader, pen tools and export work on this
-  interface. `.docx` (milestone 6) will be converted to the same shape.
+  interface. `.docx` (milestone 8) is converted to the same shape: docx-preview
+  lays it out in an isolated iframe, `core/docx/paginate.ts` splits the flow
+  into pages between lines, each page is drawn via SVG foreignObject (data: URL,
+  so the canvas stays exportable) and assembled into a reading-copy PDF with
+  pdf-lib. The original is kept under `<id>.orig`; word boxes from the layout go
+  into the text index as source "docx", so those pages are never OCR'd.
+- Indexing/OCR is app-wide (`app/IndexService.ts`): it starts right after
+  import, one book at a time; the open book and its current pages go first.
+  Pages whose PDF text is fine keep it; every other page (scan, broken or
+  repaired encoding) is OCR'd.
 - **Handwriting** (`core/annotations`): strokes stored per (book, page) in the
   IndexedDB `ink` store, in PDF points relative to the original page, so they
   survive zoom and re-layout and export 1:1. Ink in a widened margin has x < 0
