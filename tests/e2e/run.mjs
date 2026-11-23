@@ -273,7 +273,8 @@ test("milestone 3: pen writes on the page, finger still scrolls", async () => {
   assert.ok(s[0].n >= 6, "freehand keeps its shape");
   assert.ok((await inkPixels(10)) > 50, "ink is visible");
 
-  // A single finger drag scrolls and does not draw.
+  // A single finger drag scrolls and does not draw (after the 250 ms palm guard).
+  await page.waitForTimeout(400);
   const c = await cdp();
   const box = await page.locator('[data-testid="scroller"]').boundingBox();
   const before = await page.evaluate(() => document.querySelector('[data-testid="scroller"]').scrollTop);
@@ -290,6 +291,7 @@ test("milestone 3: pen writes on the page, finger still scrolls", async () => {
 
 test("milestone 3: hand tool lets the pen scroll instead of writing", async () => {
   await tool("hand");
+  await page.waitForTimeout(400);
   await penStroke(10, [[0.5, 0.5], [0.55, 0.6]]);
   assert.equal((await strokesOn(10)).length, 1);
   await tool("pen");
