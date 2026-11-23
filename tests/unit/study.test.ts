@@ -125,3 +125,53 @@ describe("StudyStore", () => {
     expect((await st.getDay("2026-11-24")).ms).toBe(0);
   });
 });
+
+import { ReadingStore, countBits, coverage, hasBit, setBit } from "../../src/core/study/reading";
+
+describe("reading coverage (non-linear)", () => {
+  it("counts distinct pages read, in any order", () => {
+    let bits: Uint8Array = new Uint8Array(0);
+    const read = (a: number, b: number) => {
+      for (let p = a; p <= b; p++) bits = setBit(bits, p).bits;
+    };
+    read(0, 59); // pages 1–60
+    read(179, 219); // 180–220
+    read(29, 89); // back to 30–90 (overlap not double counted)
+    expect(countBits(bits)).toBe(90 + 41);
+    expect(hasBit(bits, 100)).toBe(false);
+    const strip = coverage(bits, 400, 10); // 40 pages per slice
+    expect(strip[0]).toBe(1);
+    expect(strip[2]).toBeCloseTo(10 / 40); // pages 81–90 of 81–120
+    expect(strip[4]).toBeCloseTo(21 / 40); // 180–200 (21 pages) of 161–200
+    expect(strip[9]).toBe(0);
+  });
+
+  it("stores per book and per day", async () => {
+    await resetDbForTests();
+    await new Promise<void>((r) => {
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = req.onerror = req.onblocked = () => r();
+    });
+    const st = new ReadingStore();
+    await st.markRead("b", 5, "2026-11-23");
+    await st.markRead("b", 5, "2026-11-23");
+    const r = await st.markRead("b", 9, "2026-11-23");
+    expect(r.book.count).toBe(2);
+    expect(r.todayCount).toBe(2);
+    const next = await st.markRead("b", 5, "2026-11-24"); // re-reading on a new day counts for that day
+    expect(next.book.count).toBe(2);
+    expect(next.todayCount).toBe(1);
+  });
+});
+
+import { nextOccurrence } from "../../src/core/study/tasks";
+
+describe("recurring tasks", () => {
+  it("computes the next day, never in the past", () => {
+    expect(nextOccurrence("daily", "2026-11-23", "2026-11-23")).toBe("2026-11-24");
+    expect(nextOccurrence("daily", "2026-11-20", "2026-11-23")).toBe("2026-11-24"); // ticked late
+    expect(nextOccurrence("weekdays", "2026-11-27", "2026-11-27")).toBe("2026-11-30"); // Fri -> Mon
+    expect(nextOccurrence("weekly", "2026-11-23", "2026-11-23")).toBe("2026-11-30");
+    expect(nextOccurrence("weekly", "2026-11-09", "2026-11-23")).toBe("2026-11-30"); // keeps the weekday
+  });
+});

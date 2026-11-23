@@ -12,7 +12,7 @@ import type { BookMeta, Category } from "../../src/core/types";
 const cat = (id: string, name: string, parentId: string | null = null): Category => ({ id, name, parentId, createdAt: 0 });
 const book = (id: string, categoryId: string | null, tags: string[] = [], title = id): BookMeta => ({
   id, kind: "pdf", title, fileName: `${title}.pdf`, size: 1, pageCount: 1, fingerprint: id,
-  addedAt: 0, lastOpenedAt: null, lastPage: 1, zoom: 1, categoryId, tags, margins: { left: 0, right: 0 },
+  addedAt: 0, lastOpenedAt: null, lastPage: 1, zoom: 1, categoryId, tags, margins: { left: 0, right: 0 }, favorite: false, bookmarks: [],
 });
 
 const cats = [

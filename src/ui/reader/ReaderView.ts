@@ -5,6 +5,7 @@ import type { NotebookDocument } from "../../core/notebook/NotebookDocument";
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
+import { DWELL_MS } from "../../core/study/reading";
 import { h, icon, iconButton } from "../dom";
 import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
@@ -29,6 +30,9 @@ export interface ReaderDeps {
   notebooks: NotebookHost;
   study: StudySession;
   ambience: Ambience;
+  /** A page (0-based) stayed on screen long enough to count as read. */
+  onPageRead: (page: number) => void;
+  onBookmarks: (pages: number[]) => void;
 }
 
 /** What the reader needs from the app to work with exercise books. */
@@ -64,7 +68,7 @@ const PATTERNS: { label: string; p: PaperPattern }[] = [
   { label: "Nền lề: trơn", p: "blank" },
 ];
 
-type PanelTab = "thumbs" | "outline";
+type PanelTab = "thumbs" | "outline" | "marks";
 
 /** Reading screen: toolbar, page view and the side panel. */
 export class ReaderView {
@@ -100,10 +104,16 @@ export class ReaderView {
   private pill: HTMLElement;
   private pillPage: HTMLElement;
   private pillTools = new Map<Tool, HTMLButtonElement>();
+  private dwellTimer = 0;
+  private bookmarks: number[];
+  private bookmarkBtn!: HTMLButtonElement;
+  private marksList: HTMLElement;
 
   constructor(private readonly deps: ReaderDeps) {
     const { book, doc } = deps;
     this.isNotebook = book.kind === "notebook";
+    this.bookmarks = [...(book.bookmarks ?? [])];
+    this.marksList = h("div", { class: "marks", "data-testid": "marks" });
     this.tools = { ...deps.tools };
     this.activeInk = deps.ink;
     this.scroller = new PageScroller(doc, this.scheduler, {
@@ -154,13 +164,13 @@ export class ReaderView {
 
     const mkTab = (t: PanelTab, label: string) =>
       h("button", { class: "tab", type: "button", "data-tab": t, onclick: () => this.showTab(t) }, label);
-    this.tabButtons = { thumbs: mkTab("thumbs", "Trang"), outline: mkTab("outline", "Mục lục") };
+    this.tabButtons = { thumbs: mkTab("thumbs", "Trang"), outline: mkTab("outline", "Mục lục"), marks: mkTab("marks", "Đánh dấu") };
 
     this.sidebar = h(
       "aside",
       { class: "sidebar", "data-testid": "sidebar" },
-      h("div", { class: "tabs" }, this.tabButtons.thumbs, this.tabButtons.outline),
-      h("div", { class: "sidebar-body" }, this.thumbs.el, this.outline.el),
+      h("div", { class: "tabs" }, this.tabButtons.thumbs, this.tabButtons.outline, this.tabButtons.marks),
+      h("div", { class: "sidebar-body" }, this.thumbs.el, this.outline.el, this.marksList),
     );
 
     this.activeScroller = this.scroller;
@@ -201,6 +211,8 @@ export class ReaderView {
     marginBtn.dataset.testid = "margin-btn";
     const exportBtn = iconButton("exportPdf", "Xuất bản có ghi chú (PDF mới)", () => void this.exportPdf());
     exportBtn.dataset.testid = "export-btn";
+    this.bookmarkBtn = iconButton("bookmark", "Đánh dấu trang này", () => this.toggleBookmark());
+    this.bookmarkBtn.dataset.testid = "bookmark-btn";
     const nbBtn = iconButton("notebook", "Mở vở ghi chép bên cạnh", () => void this.chooseNotebook(nbBtn));
     nbBtn.dataset.testid = "nb-btn";
     const addPageBtn = iconButton("addPage", "Chèn trang trắng sau trang này", () => {
@@ -217,7 +229,7 @@ export class ReaderView {
       }
     });
     delPageBtn.dataset.testid = "del-page";
-    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn);
+    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, this.bookmarkBtn);
     if (this.isNotebook) toolGroup.append(addPageBtn, delPageBtn);
     else toolGroup.append(marginBtn);
     toolGroup.append(exportBtn);
@@ -645,6 +657,8 @@ export class ReaderView {
   /** Call after the element is in the document. */
   start(): void {
     this.scroller.start();
+    this.updateBookmarkBtn();
+    this.armDwell(this.scroller.currentPage);
     this.scroller.el.focus({ preventScroll: true });
     const companion = this.deps.notebooks.companionId;
     if (companion && !this.isNotebook) void this.openNotebook(companion);
@@ -672,7 +686,58 @@ export class ReaderView {
     this.pageInput.value = String(this.scroller.currentPage);
   }
 
+  // ---- bookmarks and reading progress --------------------------------
+
+  private toggleBookmark(): void {
+    const p = this.scroller.currentPage;
+    this.bookmarks = this.bookmarks.includes(p) ? this.bookmarks.filter((x) => x !== p) : [...this.bookmarks, p].sort((a, b) => a - b);
+    this.deps.onBookmarks(this.bookmarks);
+    toast(this.bookmarks.includes(p) ? `Đã đánh dấu trang ${p}.` : `Đã bỏ đánh dấu trang ${p}.`);
+    this.updateBookmarkBtn();
+    this.renderMarks();
+  }
+
+  private updateBookmarkBtn(): void {
+    const on = this.bookmarks.includes(this.scroller.currentPage);
+    this.bookmarkBtn.classList.toggle("marked", on);
+    this.bookmarkBtn.setAttribute("aria-pressed", String(on));
+  }
+
+  private renderMarks(): void {
+    if (!this.bookmarks.length) {
+      this.marksList.replaceChildren(h("p", { class: "muted pad" }, "Chưa có trang nào được đánh dấu. Bấm nút 🔖 trên thanh công cụ để đánh dấu trang đang đọc."));
+      return;
+    }
+    this.marksList.replaceChildren(
+      ...this.bookmarks.map((p) => {
+        const row = h(
+          "div",
+          { class: "mark-row" },
+          h("button", { class: "outline-item", type: "button", onclick: () => this.scroller.goToPage(p) }, h("span", { class: "outline-title" }, `Trang ${p}`)),
+          iconButton("close", `Bỏ đánh dấu trang ${p}`, () => {
+            this.bookmarks = this.bookmarks.filter((x) => x !== p);
+            this.deps.onBookmarks(this.bookmarks);
+            this.updateBookmarkBtn();
+            this.renderMarks();
+          }),
+        );
+        return row;
+      }),
+    );
+  }
+
+  /** A page counts as read after DWELL_MS as the main page, app visible. */
+  private armDwell(p: number): void {
+    clearTimeout(this.dwellTimer);
+    if (this.isNotebook) return;
+    this.dwellTimer = window.setTimeout(() => {
+      if (document.visibilityState === "visible" && this.scroller.currentPage === p) this.deps.onPageRead(p - 1);
+    }, (window as unknown as { __dwellMs?: number }).__dwellMs ?? DWELL_MS); // tests may shorten it
+  }
+
   private onPageChange(p: number): void {
+    this.updateBookmarkBtn();
+    this.armDwell(p);
     if (document.activeElement !== this.pageInput) this.pageInput.value = String(p);
     if (this.focusOn) this.updatePill();
     this.thumbs.setCurrent(p);
@@ -704,6 +769,8 @@ export class ReaderView {
     for (const [k, b] of Object.entries(this.tabButtons)) b.classList.toggle("active", k === t);
     this.thumbs.el.hidden = t !== "thumbs";
     this.outline.el.hidden = t !== "outline";
+    this.marksList.hidden = t !== "marks";
+    if (t === "marks") this.renderMarks();
     this.thumbs.setActive(this.panelOpen && t === "thumbs");
     if (t === "outline") void this.outline.ensureLoaded();
   }
@@ -740,6 +807,7 @@ export class ReaderView {
 
   async destroy(): Promise<void> {
     clearTimeout(this.saveTimer);
+    clearTimeout(this.dwellTimer);
     if (this.focusOn) this.setFocus(false, true);
     window.removeEventListener("popstate", this.onPopState);
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);

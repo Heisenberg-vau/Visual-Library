@@ -15,6 +15,9 @@ import { LibraryView, type ShelfView } from "../ui/library/LibraryView";
 import { DEFAULT_TOOLS, type ToolState } from "../ui/reader/InkLayer";
 import { ReaderView, type NotebookHost } from "../ui/reader/ReaderView";
 import { StudyStore } from "../core/study/StudyStore";
+import { ReadingStore } from "../core/study/reading";
+import { dayKey } from "../core/study/dates";
+import type { DailyGoal } from "../ui/library/GoalRing";
 import { Ambience } from "../ui/study/Ambience";
 import { PlannerView } from "../ui/study/PlannerView";
 import { StudySession } from "../ui/study/StudySession";
@@ -43,6 +46,7 @@ export class App {
   private inkStore = new InkStore();
   private meta: MetaStore;
   readonly studyStore = new StudyStore();
+  readonly readingStore = new ReadingStore();
   readonly ambience: Ambience;
   readonly study: StudySession;
   private planner: PlannerView | null = null;
@@ -52,6 +56,7 @@ export class App {
     this.meta = meta;
     this.library = new LibraryService(meta, createFileStore(), pdfInspector);
     this.library.onDelete((id) => this.inkStore.deleteBook(id));
+    this.library.onDelete((id) => this.readingStore.deleteBook(id));
     this.ambience = new Ambience(meta);
     this.study = new StudySession(
       meta,
@@ -69,6 +74,13 @@ export class App {
       study: this.study,
       onPlanner: () => void this.openPlanner(),
       loadTasks: () => this.studyStore.listTasks(),
+      loadReading: () => this.readingStore.all(),
+      goal: {
+        get: () => meta.getSetting<DailyGoal | null>("dailyGoal", null),
+        set: (g) => meta.setSetting("dailyGoal", g),
+        pagesToday: async () => (await this.readingStore.getDay(dayKey(new Date()))).keys.length,
+        minutesToday: () => Math.floor(this.study.todayTotal / 60_000),
+      },
     });
     window.addEventListener("popstate", () => {
       if (this.reader && !location.hash.startsWith("#read/")) void this.closeReader(false);
@@ -173,6 +185,8 @@ export class App {
         notebooks: await this.notebookHost(fresh),
         study: this.study,
         ambience: this.ambience,
+        onPageRead: (p) => void this.readingStore.markRead(book.id, p, dayKey(new Date())),
+        onBookmarks: (pages) => void this.library.setBookmarks(book.id, pages),
       });
       this.study.bookId = book.id;
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);

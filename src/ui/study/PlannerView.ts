@@ -2,7 +2,7 @@ import { buildTree, flatten } from "../../core/library/shelves";
 import type { LibraryService } from "../../core/storage/LibraryService";
 import { addDays, countdown, dayKey, friendlyDay, longDate, weekStart, weekdayName, type DayKey } from "../../core/study/dates";
 import type { StudyStore } from "../../core/study/StudyStore";
-import { groupByDay, isOverdue, todayList, upcomingDeadlines, weekDays, type Task } from "../../core/study/tasks";
+import { REPEAT_LABEL, groupByDay, isOverdue, nextOccurrence, todayList, upcomingDeadlines, weekDays, type Repeat, type Task } from "../../core/study/tasks";
 import type { BookMeta, Category } from "../../core/types";
 import { h, icon, iconButton } from "../dom";
 import { confirmDialog, modal, popupMenu, toast } from "../feedback";
@@ -168,6 +168,7 @@ export class PlannerView {
     const book = t.bookId ? this.books.find((b) => b.id === t.bookId) : null;
     const chips: HTMLElement[] = [];
     if (t.kind === "deadline") chips.push(h("span", { class: "chip-s exam" }, "Deadline · Thi"));
+    if (t.repeat) chips.push(h("span", { class: "chip-s repeat", "data-testid": "repeat-chip", html: `${icon("repeat", 12)} ${REPEAT_LABEL[t.repeat]}` }));
     if (subject) chips.push(h("span", { class: "chip-s" }, subject));
     if (t.date && !compact) chips.push(h("span", { class: `chip-s ${isOverdue(t, today) ? "late" : ""}` }, isOverdue(t, today) ? `Quá hạn · ${friendlyDay(t.date, today)}` : friendlyDay(t.date, today)));
     const open = book
@@ -200,7 +201,14 @@ export class PlannerView {
   private async toggle(t: Task): Promise<void> {
     const next = { ...t, done: !t.done, doneAt: t.done ? null : Date.now() };
     await this.deps.store.putTask(next);
-    if (next.done) toast("Tốt lắm! Đã đánh dấu xong.");
+    if (next.done && t.repeat) {
+      // The finished one stays as history; the next occurrence appears.
+      const date = nextOccurrence(t.repeat, t.date, this.today());
+      await this.deps.store.putTask({ ...t, id: crypto.randomUUID(), date, done: false, doneAt: null, createdAt: Date.now() });
+      toast(`Tốt lắm! Lần tới: ${friendlyDay(date, this.today())}.`);
+    } else if (next.done) {
+      toast("Tốt lắm! Đã đánh dấu xong.");
+    }
     await this.refresh();
   }
 
@@ -241,6 +249,13 @@ export class PlannerView {
       for (const b of this.books) book.append(h("option", { value: b.id }, `${b.kind === "notebook" ? "📓 " : ""}${b.title}`));
       book.value = t?.bookId ?? "";
       const page = h("input", { class: "text-input", type: "number", min: "1", placeholder: "Trang", value: t?.page ? String(t.page) : "", "data-testid": "task-page" });
+      const repeat = h(
+        "select",
+        { class: "text-input", "data-testid": "task-repeat" },
+        h("option", { value: "" }, "Không lặp lại"),
+        ...(Object.entries(REPEAT_LABEL) as [Repeat, string][]).map(([v, label]) => h("option", { value: v }, label)),
+      );
+      repeat.value = t?.repeat ?? "";
       const form = h(
         "form",
         { class: "modal modal-wide task-form", role: "dialog", "aria-modal": "true", "data-testid": "task-form" },
@@ -248,6 +263,7 @@ export class PlannerView {
         title,
         h("div", { class: "form-grid" }, h("label", {}, "Loại", kind), h("label", {}, "Ngày", date, quick)),
         h("div", { class: "form-grid" }, h("label", {}, "Môn", subject), h("label", { class: "book-pick" }, "Sách / vở", book, page)),
+        h("div", { class: "form-grid" }, h("label", {}, "Lặp lại", repeat), h("span")),
         h(
           "div",
           { class: "modal-actions" },
@@ -268,13 +284,16 @@ export class PlannerView {
           subjectId: subject.value || null,
           bookId: book.value || null,
           page: page.value ? Math.max(1, Math.round(Number(page.value))) : null,
+          repeat: (repeat.value || null) as Repeat | null,
         });
       });
       setTimeout(() => title.focus(), 0);
       return form;
     });
     if (!result) return;
-    const data = result as Pick<Task, "title" | "kind" | "date" | "subjectId" | "bookId" | "page">;
+    const data = result as Pick<Task, "title" | "kind" | "date" | "subjectId" | "bookId" | "page" | "repeat">;
+    // A repeating task needs a day to repeat from.
+    if (data.repeat && !data.date) data.date = this.today();
     const task: Task = t
       ? { ...t, ...data }
       : { id: crypto.randomUUID(), ...data, done: false, doneAt: null, createdAt: Date.now() };

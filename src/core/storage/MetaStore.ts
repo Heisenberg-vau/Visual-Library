@@ -9,6 +9,8 @@ function normalize(b: BookMeta): BookMeta {
     categoryId: b.categoryId ?? null,
     tags: Array.isArray(b.tags) ? b.tags : [],
     margins: b.margins ?? { left: 0, right: 0 },
+    favorite: b.favorite ?? false,
+    bookmarks: Array.isArray(b.bookmarks) ? b.bookmarks : [],
   };
 }
 

@@ -216,7 +216,7 @@ test("remembers the reading position", async () => {
   await page.keyboard.press("Enter");
   await page.waitForTimeout(1000); // debounce save
   await backToShelf();
-  assert.match(await cards().filter({ hasText: "650" }).textContent(), /Trang 123/);
+  assert.match(await cards().filter({ hasText: "650" }).textContent(), /trang 123/i);
   await openBook("650");
   await waitRendered(123);
   assert.equal(await currentPage(), 123);
@@ -710,6 +710,88 @@ test("milestone 6: focus mode hides the chrome; back gesture leaves it, not the 
   await page.waitForTimeout(300);
   assert.ok(await page.isVisible('[data-testid="scroller"]'), "exit button keeps you in the book");
   await backToShelf();
+});
+
+// ---- v0.6.1: real reading progress, goal, favorites, bookmarks, recurring tasks ----
+
+test("v0.6.1: progress counts pages actually read, in any order", async () => {
+  await page.evaluate(() => (window.__dwellMs = 300));
+  await openBook("650");
+  const before = await page.evaluate(async () => {
+    const id = window.__reader.inkForTests && document.querySelector(".reader-title").textContent;
+    return id;
+  });
+  void before;
+  for (const n of [400, 401, 402, 200, 401]) {
+    await gotoPage(n);
+    await page.waitForTimeout(600);
+  }
+  await backToShelf();
+  const text = await cards().filter({ hasText: "650" }).first().locator('[data-testid="read-progress"]').textContent();
+  const m = text.match(/Đã đọc (\d+)% · (\d+)\/650 trang/);
+  assert.ok(m, text);
+  assert.ok(Number(m[2]) >= 4, "pages 200, 400, 401, 402 counted once each");
+  const lit = await cards().filter({ hasText: "650" }).first().locator('[data-testid="read-strip"] span').evaluateAll((els) => els.filter((e) => Number(e.style.opacity) > 0).length);
+  assert.ok(lit >= 2, "the strip shows where you read");
+});
+
+test("v0.6.1: optional daily goal ring", async () => {
+  await page.click('[data-testid="goal-ring"]');
+  await page.selectOption('[data-testid="goal-kind"]', "pages");
+  await page.fill('[data-testid="goal-target"]', "3");
+  await page.click('[data-testid="goal-save"]');
+  await page.waitForFunction(() => /\d+\/3 trang/.test(document.querySelector('[data-testid="goal-ring"]').textContent));
+  assert.equal(await page.getAttribute('[data-testid="goal-ring"]', "data-state"), "done", "4 pages read today >= 3");
+});
+
+test("v0.6.1: starred books come first and have their own view", async () => {
+  const small = cards().filter({ hasText: "3 pages" });
+  await small.locator('[data-testid="star"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="book-card"]').textContent.includes("3 pages"));
+  await page.click('[data-testid="view-favorites"]');
+  assert.equal(await cards().count(), 1);
+  await shot("21-favorites");
+  await page.click('[data-testid="view-all"]');
+});
+
+test("v0.6.1: bookmark pages and jump back from the list", async () => {
+  await openBook("650");
+  await gotoPage(42);
+  await page.click('[data-testid="bookmark-btn"]');
+  assert.equal(await page.getAttribute('[data-testid="bookmark-btn"]', "aria-pressed"), "true");
+  await gotoPage(300);
+  await page.click(".tb-panel");
+  await page.click('.tab[data-tab="marks"]');
+  await page.locator('[data-testid="marks"] .outline-item', { hasText: "Trang 42" }).click();
+  await waitRendered(42);
+  assert.equal(await currentPage(), 42);
+  await page.click(".tb-panel");
+  await backToShelf();
+  await openBook("650");
+  await page.click(".tb-panel");
+  await page.click('.tab[data-tab="marks"]');
+  assert.equal(await page.locator('[data-testid="marks"] .outline-item').count(), 1, "remembered");
+  await page.click(".tb-panel");
+  await backToShelf();
+});
+
+test("v0.6.1: a recurring task comes back after you tick it", async () => {
+  await page.click('[data-testid="planner-btn"]');
+  await page.click('[data-testid="add-task"]');
+  await page.fill('[data-testid="task-title"]', "Ôn 30 từ HSK");
+  await page.selectOption('[data-testid="task-repeat"]', "daily");
+  await page.click('[data-testid="task-save"]');
+  const row = page.locator('[data-testid="task"]', { hasText: "Ôn 30 từ HSK" });
+  await row.first().waitFor();
+  assert.match(await row.first().textContent(), /Hằng ngày/);
+  await row.first().locator('[data-testid="task-check"]').check();
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("Lần tới: Ngày mai")));
+  await page.click('.tab[data-tab="all"]');
+  const open = page.locator('[data-testid="task"]:not(.done)', { hasText: "Ôn 30 từ HSK" });
+  assert.equal(await open.count(), 1, "next occurrence is waiting");
+  assert.match(await open.textContent(), /Ngày mai/);
+  await page.goBack();
+  await page.waitForSelector('[data-testid="shelf"]');
 });
 
 test("works offline after the first visit", async () => {

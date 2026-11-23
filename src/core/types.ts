@@ -27,6 +27,10 @@ export interface BookMeta {
   margins: { left: number; right: number; pattern?: "blank" | "lines" | "grid" | "dots" };
   /** Notebooks only: paper of every page. */
   paper?: "blank" | "lines" | "grid" | "dots";
+  /** Starred: shown first and under "Yêu thích". */
+  favorite: boolean;
+  /** Bookmarked pages (1-based, sorted). */
+  bookmarks: number[];
 }
 
 /** A shelf. Shelves nest: "Hàng không" > "Động cơ". */

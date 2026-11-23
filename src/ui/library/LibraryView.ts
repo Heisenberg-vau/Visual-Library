@@ -8,6 +8,8 @@ import { editTags, pickShelf } from "./dialogs";
 import { ShelfPanel, type ShelfView } from "./ShelfPanel";
 
 import type { StudySession } from "../study/StudySession";
+import { GoalRing, type GoalDeps } from "./GoalRing";
+import { coverage, type BookReading } from "../../core/study/reading";
 import { dueCount, type Task } from "../../core/study/tasks";
 import { dayKey } from "../../core/study/dates";
 
@@ -20,6 +22,8 @@ export interface LibraryViewDeps {
   study: StudySession;
   onPlanner: () => void;
   loadTasks: () => Promise<Task[]>;
+  loadReading: () => Promise<Map<string, BookReading>>;
+  goal: GoalDeps;
 }
 
 /** Bookshelf screen: shelves, tags, import, list, bulk actions. */
@@ -44,6 +48,8 @@ export class LibraryView {
   private selected = new Set<string>();
   private viewLoaded = false;
   private plannerBadge: HTMLElement;
+  private goalRing: GoalRing;
+  private reading = new Map<string, BookReading>();
 
   constructor(private readonly deps: LibraryViewDeps) {
     this.fileInput = h("input", {
@@ -75,6 +81,7 @@ export class LibraryView {
       html: `${icon("upload", 20)}<span>Nhập tài liệu</span>`,
       onclick: () => this.fileInput.click(),
     });
+    this.goalRing = new GoalRing(deps.goal);
     this.plannerBadge = h("span", { class: "badge", hidden: true, "data-testid": "planner-badge" });
     const plannerBtn = h(
       "button",
@@ -133,6 +140,7 @@ export class LibraryView {
         menuBtn,
         h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("book", 26) }), h("h1", {}, "Visual Library")),
         h("div", { class: "lib-search" }, h("span", { class: "search-ic", html: icon("search", 18) }), this.filterInput),
+        this.goalRing.el,
         deps.study.chip().el,
         plannerBtn,
         selectBtn,
@@ -165,10 +173,14 @@ export class LibraryView {
       this.viewLoaded = true;
       this.view = await this.deps.loadView();
     }
-    [this.books, this.categories] = await Promise.all([
+    [this.books, this.categories, this.reading] = await Promise.all([
       this.deps.library.list(),
       this.deps.library.listCategories(),
+      this.deps.loadReading(),
     ]);
+    // Starred books first, otherwise most recently used.
+    this.books.sort((a, b) => Number(b.favorite) - Number(a.favorite));
+    void this.goalRing.refresh();
     // The shelf we were on may have been deleted.
     if (this.view.kind === "shelf" && !this.categories.some((c) => this.view.kind === "shelf" && c.id === this.view.id)) {
       this.view = { kind: "all" };
@@ -206,6 +218,7 @@ export class LibraryView {
     let list = this.books;
     const known = new Set(this.categories.map((c) => c.id));
     if (this.view.kind === "unsorted") list = list.filter((b) => !b.categoryId || !known.has(b.categoryId));
+    if (this.view.kind === "favorites") list = list.filter((b) => b.favorite);
     if (this.view.kind === "shelf") {
       const ids = subtreeIds(this.categories, this.view.id);
       list = list.filter((b) => b.categoryId && ids.has(b.categoryId));
@@ -236,7 +249,9 @@ export class LibraryView {
         parts.push(link(c.name, { kind: "shelf", id: c.id }));
       }
     } else {
-      parts.push(h("span", { class: "crumb current" }, this.view.kind === "all" ? "Tất cả tài liệu" : "Chưa phân loại"));
+      parts.push(
+        h("span", { class: "crumb current" }, this.view.kind === "all" ? "Tất cả tài liệu" : this.view.kind === "favorites" ? "Yêu thích" : "Chưa phân loại"),
+      );
     }
     const actions = h("div", { class: "crumb-actions" });
     if (this.tag) {
@@ -351,7 +366,28 @@ export class LibraryView {
     const cover = h("div", { class: `card-cover ${isNb ? `nb-cover paper-${b.paper ?? "lines"}` : ""}` });
     if (isNb) cover.append(h("span", { class: "nb-cover-label" }, b.title), h("span", { class: "nb-cover-tag", html: icon("notebook", 16) }));
     else void this.loadCover(b.id, cover);
-    const progress = b.pageCount > 1 ? Math.round(((b.lastPage - 1) / (b.pageCount - 1)) * 100) : 0;
+    const rd = this.reading.get(b.id);
+    const readCount = rd?.count ?? 0;
+    const pct = b.pageCount ? Math.round((readCount / b.pageCount) * 100) : 0;
+    const strip = h("div", { class: "cover-strip", title: "Những đoạn đã đọc", "data-testid": "read-strip" });
+    if (!isNb) {
+      for (const f of coverage(rd?.bits ?? new Uint8Array(0), b.pageCount, 24)) {
+        strip.append(h("span", { style: `opacity:${f === 0 ? 0 : 0.25 + 0.75 * f}` }));
+      }
+    }
+    const star = h("button", {
+      class: `card-star ${b.favorite ? "on" : ""}`,
+      type: "button",
+      "aria-label": b.favorite ? "Bỏ yêu thích" : "Yêu thích",
+      "aria-pressed": String(b.favorite),
+      "data-testid": "star",
+      html: icon("star", 20),
+    });
+    star.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await this.deps.library.setFavorite(b.id, !b.favorite);
+      await this.refresh();
+    });
     const more = h("button", { class: "icon-btn card-more", type: "button", "aria-label": "Tùy chọn", html: icon("more", 20) });
     more.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -379,14 +415,17 @@ export class LibraryView {
         showPath ? h("div", { class: "card-path", title: path.map((c) => c.name).join(" › ") }, path.map((c) => c.name).join(" › ")) : null,
         h("div", { class: "card-meta" }, isNb ? `Vở · ${b.pageCount} trang` : `${b.pageCount} trang · ${formatBytes(b.size)}`),
         tags.length ? h("div", { class: "card-tags" }, ...tags) : null,
-        h(
-          "div",
-          { class: "card-progress", title: `Đang ở trang ${b.lastPage}` },
-          h("div", { class: "bar" }, h("span", { style: `width:${progress}%` })),
-          h("span", { class: "pct" }, b.lastOpenedAt ? `Trang ${b.lastPage}` : "Chưa đọc"),
-        ),
+        isNb
+          ? h("div", { class: "card-progress" }, h("span", { class: "pct" }, b.lastOpenedAt ? `Đang ở trang ${b.lastPage}` : "Chưa mở"))
+          : h(
+              "div",
+              { class: "card-progress", "data-testid": "read-progress", title: `Đang ở trang ${b.lastPage}` },
+              h("span", { class: "pct" }, readCount ? `Đã đọc ${pct}% · ${readCount}/${b.pageCount} trang` : b.lastOpenedAt ? `Đang ở trang ${b.lastPage}` : "Chưa đọc"),
+            ),
       ),
+      isNb ? null : strip,
       this.selecting ? null : more,
+      this.selecting ? null : star,
     );
     const activate = () => {
       if (this.selecting) {

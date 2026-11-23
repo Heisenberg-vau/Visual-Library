@@ -1,4 +1,12 @@
-import { addDays, daysBetween, weekStart, type DayKey } from "./dates";
+import { addDays, daysBetween, parseDay, weekStart, type DayKey } from "./dates";
+
+export type Repeat = "daily" | "weekdays" | "weekly";
+
+export const REPEAT_LABEL: Record<Repeat, string> = {
+  daily: "Hằng ngày",
+  weekdays: "Thứ Hai – Thứ Sáu",
+  weekly: "Hằng tuần",
+};
 
 /** A study task or a deadline/exam set by the user. */
 export interface Task {
@@ -15,6 +23,25 @@ export interface Task {
   done: boolean;
   doneAt: number | null;
   createdAt: number;
+  /** Recurring task: when ticked, the next occurrence appears. */
+  repeat?: Repeat | null;
+}
+
+/**
+ * Next due day of a recurring task after it is done. Never in the past:
+ * a daily task ticked late comes back tomorrow, not on a day already gone.
+ */
+export function nextOccurrence(repeat: Repeat, due: DayKey | null, today: DayKey): DayKey {
+  const from = due && daysBetween(today, due) > 0 ? due : today;
+  if (repeat === "daily") return addDays(from, 1);
+  if (repeat === "weekly") {
+    let d = addDays(due ?? today, 7);
+    while (daysBetween(today, d) <= 0) d = addDays(d, 7);
+    return d;
+  }
+  let d = addDays(from, 1);
+  while ([0, 6].includes(parseDay(d).getDay())) d = addDays(d, 1);
+  return d;
 }
 
 export function isOverdue(t: Task, today: DayKey): boolean {

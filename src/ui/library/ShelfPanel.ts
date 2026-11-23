@@ -2,7 +2,7 @@ import { buildTree, countBooks, sameTag, tagCounts, type ShelfNode } from "../..
 import type { BookMeta, Category } from "../../core/types";
 import { h, icon } from "../dom";
 
-export type ShelfView = { kind: "all" } | { kind: "unsorted" } | { kind: "shelf"; id: string };
+export type ShelfView = { kind: "all" } | { kind: "favorites" } | { kind: "unsorted" } | { kind: "shelf"; id: string };
 
 export interface ShelfPanelCallbacks {
   onSelect: (v: ShelfView) => void;
@@ -100,6 +100,7 @@ export class ShelfPanel {
 
     this.el.replaceChildren(
       item("Tất cả tài liệu", "library", books.length, view.kind === "all", () => this.cb.onSelect({ kind: "all" }), "view-all"),
+      item("Yêu thích", "star", books.filter((b) => b.favorite).length, view.kind === "favorites", () => this.cb.onSelect({ kind: "favorites" }), "view-favorites"),
       item("Chưa phân loại", "inbox", unsorted, view.kind === "unsorted", () => this.cb.onSelect({ kind: "unsorted" }), "view-unsorted"),
       h("div", { class: "sp-head" }, h("span", {}, "Danh mục"), addBtn),
       tree,

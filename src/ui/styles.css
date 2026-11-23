@@ -611,3 +611,28 @@ body[data-tone="dark"] .reader-body { background: #2b2d31; }
   .btn-planner .lbl { display: none; }
   .week-grid { grid-template-columns: repeat(7, 170px); }
 }
+
+/* ---------- reading progress, favorites, bookmarks, goal ---------- */
+.card-star {
+  position: absolute; left: 8px; top: 8px; width: 38px; height: 38px; border-radius: 50%; border: 0; cursor: pointer;
+  display: grid; place-items: center; background: rgb(255 255 255 / 0.92); box-shadow: 0 1px 4px rgb(0 0 0 / 0.2); color: #b9b3a6;
+}
+.card-star.on { color: #e3a008; }
+.card-star.on svg { fill: currentColor; }
+.cover-strip { display: flex; gap: 1px; height: 6px; padding: 0 12px 10px; }
+.cover-strip span { flex: 1; background: var(--accent); border-radius: 1px; min-width: 1px; }
+.cover-strip { background-image: linear-gradient(#ece6da, #ece6da); background-size: calc(100% - 24px) 6px; background-position: 12px 0; background-repeat: no-repeat; }
+.card-progress .pct { white-space: normal; }
+.tool-btn.marked, .icon-btn.marked { color: #c2410c; }
+.icon-btn.marked svg { fill: #fdba74; }
+.marks { position: absolute; inset: 0; overflow-y: auto; }
+.mark-row { display: flex; align-items: center; padding-left: 12px; border-bottom: 1px solid var(--line); }
+.goal-ring {
+  display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 10px; border-radius: 20px;
+  border: 1px solid var(--line); background: var(--card); cursor: pointer; color: var(--brand); font-weight: 600; white-space: nowrap;
+}
+.goal-ring[data-state="off"] { color: var(--ink-soft); }
+.goal-ring[data-state="done"] { color: #1e8a4c; background: #e8f3ec; border-color: #9fd0b0; }
+.goal-text { font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.chip-s.repeat { background: #e9f0fb; color: #1f5fbf; display: inline-flex; align-items: center; gap: 4px; }
+@media (max-width: 1100px) { .goal-text { display: none; } }

@@ -58,6 +58,9 @@ src/
   `PlannerView` manages tasks/deadlines (`tasks` store, DB v4). `Ambience`
   adds screen-only overlays (dim, warm), page tone via CSS filters, and
   Web Audio generated rain/brown/white noise.
+- **Reading progress** (`core/study/reading.ts`, DB v5): a page counts as read
+  after 8 s as the main page; a per-book bitset gives "pages actually read"
+  for non-linear reading, plus a per-day set for the optional daily goal.
 - **Input rules:** pen (and mouse, for laptops) writes; fingers only scroll and
   pinch. Stylus touches are `preventDefault`-ed so the page never scrolls under
   the pen, and touches are ignored for 250 ms after pen activity (palm).

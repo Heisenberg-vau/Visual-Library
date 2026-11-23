@@ -117,6 +117,8 @@ export class LibraryService {
         categoryId,
         tags: [],
         margins: { left: 0, right: 0 },
+        favorite: false,
+        bookmarks: [],
       };
       await this.meta.put(book);
       if (info.cover) await this.meta.putCover(id, info.cover);
@@ -162,6 +164,8 @@ export class LibraryService {
       tags: [],
       margins: { left: 0, right: 0 },
       paper,
+      favorite: false,
+      bookmarks: [],
     };
     await this.meta.put(nb);
     return nb;
@@ -297,6 +301,15 @@ export class LibraryService {
     await this.meta.putMany(
       books.map((b) => ({ ...b, tags: mergeTags(b.tags.filter((t) => !sameTag(t, from)), [to]) })),
     );
+  }
+
+  async setFavorite(id: string, favorite: boolean): Promise<void> {
+    await this.meta.update(id, { favorite });
+  }
+
+  async setBookmarks(id: string, pages: number[]): Promise<void> {
+    const clean = [...new Set(pages.filter((p) => Number.isInteger(p) && p > 0))].sort((a, b) => a - b);
+    await this.meta.update(id, { bookmarks: clean });
   }
 
   async markOpened(id: string): Promise<void> {
