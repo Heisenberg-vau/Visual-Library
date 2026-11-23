@@ -666,7 +666,7 @@ test("milestone 6: plan tasks and a deadline with a countdown", async () => {
   await shot("17-planner-today");
   await page.goBack();
   await page.waitForSelector('[data-testid="shelf"]');
-  assert.equal(await page.textContent('[data-testid="planner-badge"]'), "1", "one task due today");
+  await page.waitForFunction(() => document.querySelector('[data-testid="planner-badge"]')?.textContent === "1", null, { timeout: 5000 });
 });
 
 test("milestone 6: a task opens its book at the planned page", async () => {
@@ -1119,6 +1119,24 @@ test("clip: notebook export keeps the pasted text and picture", async () => {
   });
   assert.ok(p2, "a page with the two clips as images");
   await backToShelf();
+});
+
+test("v1.0: Giấy da / Ánh nến theme, remembered after reload", async () => {
+  await shot("40-theme-day-library");
+  await page.click('[data-testid="theme-btn"]');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "night");
+  await shot("41-theme-night-library");
+  await page.reload();
+  await page.waitForSelector('[data-testid="book-card"]');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "night", "kept after reload");
+  await openBook("650");
+  await waitRendered(await currentPage());
+  await shot("42-theme-night-reader");
+  await backToShelf();
+  await page.click('[data-testid="theme-btn"]');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme ?? null), null);
+  // Fonts are bundled (offline) and in use.
+  assert.ok(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check('16px "EB Garamond"', "Thư viện") && document.fonts.check('700 16px "Cormorant Garamond"', "Đọc"); }));
 });
 
 test("works offline after the first visit", async () => {

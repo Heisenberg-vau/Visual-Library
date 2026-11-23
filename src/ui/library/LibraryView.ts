@@ -10,6 +10,7 @@ import { ShelfPanel, type ShelfView } from "./ShelfPanel";
 import type { StudySession } from "../study/StudySession";
 import { GoalRing, type GoalDeps } from "./GoalRing";
 import type { IndexService } from "../../app/IndexService";
+import { applyTheme, currentTheme } from "../theme";
 import { coverage, type BookReading } from "../../core/study/reading";
 import { dueCount, type Task } from "../../core/study/tasks";
 import { dayKey } from "../../core/study/dates";
@@ -90,6 +91,18 @@ export class LibraryView {
       if (el) this.renderOcrStatus(id, el);
     });
     this.plannerBadge = h("span", { class: "badge", hidden: true, "data-testid": "planner-badge" });
+    const themeBtn = h("button", { class: "icon-btn theme-btn", type: "button", "data-testid": "theme-btn" });
+    const paintTheme = () => {
+      const night = currentTheme() === "night";
+      themeBtn.innerHTML = icon(night ? "sun" : "candle", 22);
+      themeBtn.title = night ? "Chuyển sang Giấy da (ban ngày)" : "Chuyển sang Ánh nến (ban đêm)";
+      themeBtn.setAttribute("aria-label", themeBtn.title);
+    };
+    themeBtn.addEventListener("click", () => {
+      applyTheme(currentTheme() === "night" ? "day" : "night");
+      paintTheme();
+    });
+    paintTheme();
     const plannerBtn = h(
       "button",
       { class: "btn btn-planner", type: "button", "data-testid": "planner-btn", onclick: () => deps.onPlanner(), title: "Kế hoạch học" },
@@ -145,11 +158,12 @@ export class LibraryView {
         "header",
         { class: "lib-header" },
         menuBtn,
-        h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("book", 26) }), h("h1", {}, "Visual Library")),
+        h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("emblem", 30) }), h("h1", {}, "Visual Library")),
         h("div", { class: "lib-search" }, h("span", { class: "search-ic", html: icon("search", 18) }), this.filterInput),
         this.goalRing.el,
         deps.study.chip().el,
         plannerBtn,
+        themeBtn,
         selectBtn,
         notebookBtn,
         importBtn,

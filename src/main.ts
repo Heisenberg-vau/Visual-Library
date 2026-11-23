@@ -1,4 +1,8 @@
+import "./ui/fonts";
 import "./ui/styles.css";
+import { loadTheme } from "./ui/theme";
+
+loadTheme();
 import { App } from "./app/App";
 import { toast } from "./ui/feedback";
 

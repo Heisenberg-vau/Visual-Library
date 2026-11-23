@@ -38,6 +38,16 @@ npm run build && npm run fixtures && npm run test:e2e   # kiểm thử end-to-en
 
 Kiến trúc và quy ước: xem [ARCHITECTURE.md](ARCHITECTURE.md). Mỗi lần đẩy lên `main`, GitHub Actions chạy toàn bộ kiểm thử; chỉ khi pass hết mới đăng bản mới. Mỗi mốc được gắn tag (`v0.1.0`, ...) để quay lại khi cần.
 
+## Giai đoạn 2 – Giao diện (phong cách "Thư viện cổ")
+
+| Mốc | Nội dung | Trạng thái |
+|---|---|---|
+| v1.0 | Bộ phong cách: màu gỗ óc chó/giấy da/xanh thư viện/vàng đồng, chữ EB Garamond + Cormorant Garamond (có sẵn offline), biểu tượng nét khắc, hai chế độ Giấy da / Ánh nến | ✅ v1.0.0 |
+| v1.1 | Màn hình thư viện: khu, kệ gỗ, sách trên kệ, "Đọc tiếp" | |
+| v1.2 | Màn hình đọc: thanh công cụ, bảng chọn bút, chế độ tập trung | |
+| v1.3 | Bàn học: kế hoạch, hẹn giờ, âm thanh, việc hôm nay | |
+| v1.4 | Hoàn thiện: chuyển cảnh, màn hình trống, hướng dẫn lần đầu, độ tương phản | |
+
 ## Cần quan tâm (chưa test / để sau)
 
 - **File Word (.docx)** – chưa được test với file thật (người dùng chưa có file). Khi có file: kiểm tra dàn trang, font thay thế trên máy tính bảng, bảng/hình, đầu trang – chân trang – số trang (chưa hiển thị).
