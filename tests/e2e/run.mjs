@@ -159,6 +159,8 @@ test("table of contents navigates to a chapter", async () => {
 });
 
 test("thumbnails show the current page and navigate", async () => {
+  try {
+
   await page.click('.tab[data-tab="thumbs"]');
   await page.waitForSelector(".thumb.current .thumb-canvas", { timeout: 30000 }); // queued behind full-resolution page renders
   await page.waitForFunction(() => Number(document.querySelector(".thumb.current")?.dataset.page) === window.__reader.scrollerForTests.currentPage, null, { timeout: 5000 });
@@ -168,6 +170,19 @@ test("thumbnails show the current page and navigate", async () => {
   await page.waitForFunction((k) => window.__reader.scrollerForTests.currentPage === k, n, { timeout: 5000 });
   await shot("05-thumbs");
   await page.click(".tb-panel");
+  } catch (e) {
+    const diag = await page.evaluate(() => ({
+      current: window.__reader?.scrollerForTests.currentPage,
+      thumbCurrent: document.querySelector(".thumb.current")?.dataset.page,
+      thumbs: [...document.querySelectorAll(".thumb")].map((t) => t.dataset.page + (t.querySelector("canvas") ? "c" : "")).join(","),
+      sidebar: document.querySelector(".sidebar") && getComputedStyle(document.querySelector(".sidebar")).display,
+      thumbsHidden: document.querySelector(".thumbs")?.hidden,
+      scrollTop: document.querySelector(".thumbs")?.scrollTop,
+    }));
+    console.log("THUMB DIAG", JSON.stringify(diag));
+    await shot("fail-thumbs");
+    throw e;
+  }
 });
 
 test("zoom buttons and pinch zoom", async () => {
@@ -597,6 +612,103 @@ test("milestone 5: export a notebook to PDF", async () => {
   assert.equal(name, "Vo M15 - Dong co (ghi chu).pdf");
   const doc = await PDFDocument.load(readFileSync(path));
   assert.equal(doc.getPageCount(), 3);
+  await backToShelf();
+});
+
+// ---- milestone 6: study experience ----
+
+const todayKey = () => page.evaluate(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+async function addTask({ title, kind = "task", date, book, pageNo }) {
+  await page.click('[data-testid="add-task"]');
+  await page.fill('[data-testid="task-title"]', title);
+  await page.selectOption('[data-testid="task-kind"]', kind);
+  if (date !== undefined) await page.fill('[data-testid="task-date"]', date);
+  if (book) await page.selectOption('[data-testid="task-book"]', { label: book });
+  if (pageNo) await page.fill('[data-testid="task-page"]', String(pageNo));
+  await page.click('[data-testid="task-save"]');
+  await page.waitForFunction((t) => [...document.querySelectorAll('[data-testid="task"]')].some((e) => e.textContent.includes(t)) || [...document.querySelectorAll('[data-testid="deadline"]')].some((e) => e.textContent.includes(t)), title);
+}
+
+test("milestone 6: plan tasks and a deadline with a countdown", async () => {
+  await page.click('[data-testid="planner-btn"]');
+  await page.waitForSelector('[data-testid="planner"]');
+  const today = await todayKey();
+  const in3 = await page.evaluate((t) => { const [y, m, d] = t.split("-").map(Number); const x = new Date(y, m - 1, d + 3); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; }, today);
+  await addTask({ title: "Ôn chương 12 Rolls-Royce", date: today, book: "Test book 650 pages", pageNo: 77 });
+  await addTask({ title: "Thi M11", kind: "deadline", date: in3 });
+  assert.match(await page.textContent('[data-testid="deadline"]'), /còn 3 ngày.*Thi M11/);
+  await page.click('.tab[data-tab="week"]');
+  assert.equal(await page.locator(".day-col").count(), 7);
+  assert.ok(await page.locator(".day-col.is-today").textContent().then((t) => t.includes("Ôn chương 12")));
+  await shot("16-planner-week");
+  await page.click('.tab[data-tab="today"]');
+  await shot("17-planner-today");
+  await page.goBack();
+  await page.waitForSelector('[data-testid="shelf"]');
+  assert.equal(await page.textContent('[data-testid="planner-badge"]'), "1", "one task due today");
+});
+
+test("milestone 6: a task opens its book at the planned page", async () => {
+  await page.click('[data-testid="planner-btn"]');
+  await page.locator('[data-testid="task"]', { hasText: "Ôn chương 12" }).locator('[data-testid="task-open"]').click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  await waitRendered(77);
+  assert.equal(await currentPage(), 77);
+});
+
+test("milestone 6: study timer suggests a break and never forces it", async () => {
+  await page.click('.reader-toolbar [data-testid="timer-chip"]');
+  await page.click('[data-testid="timer-start"]');
+  await page.mouse.click(5, 400); // close the panel
+  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "focus");
+  await page.evaluate(() => window.__app.study.debugAdvance(25 * 60_000));
+  await page.waitForSelector('[data-testid="break-suggest"]');
+  await shot("18-break-suggest");
+  await page.click('[data-testid="plus10"]'); // keep studying 10 more minutes
+  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "focus");
+  await page.evaluate(() => window.__app.study.debugAdvance(10 * 60_000));
+  await page.waitForSelector('[data-testid="break-suggest"]');
+  await page.click('[data-testid="take-break"]');
+  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "break");
+  await page.evaluate(() => window.__app.study.debugAdvance(5 * 60_000));
+  await page.waitForSelector('[data-testid="break-over"]');
+  await page.locator('[data-testid="break-over"] .btn', { hasText: "Để sau" }).click();
+  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "idle");
+  await page.click('.reader-toolbar [data-testid="timer-chip"]');
+  const total = await page.textContent('[data-testid="today-total"]');
+  assert.match(total, /Hôm nay đã học: 3\d phút/, total);
+  await page.mouse.click(5, 400);
+});
+
+test("milestone 6: paper tone, dimming and relaxing sound", async () => {
+  await page.click('.reader-toolbar [data-testid="ambience-btn"]');
+  await page.click('[data-testid="amb-tone"] [data-value="sepia"]');
+  assert.equal(await page.evaluate(() => document.body.dataset.tone), "sepia");
+  await page.locator('[data-testid="amb-warm"]').fill("0.3");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".amb-warm")).opacity === "0.3"); // after the fade
+  await page.click('[data-testid="amb-sound"] [data-value="rain"]');
+  await page.waitForTimeout(300);
+  await shot("19-ambience");
+  await page.click('[data-testid="amb-sound"] [data-value="off"]');
+  await page.click('[data-testid="amb-tone"] [data-value="white"]');
+  await page.locator('[data-testid="amb-warm"]').fill("0");
+  await page.mouse.click(5, 400);
+});
+
+test("milestone 6: focus mode hides the chrome; back gesture leaves it, not the book", async () => {
+  await page.click('[data-testid="focus-btn"]');
+  await page.waitForSelector('.reader.focus [data-testid="focus-pill"]');
+  assert.equal(await page.isVisible(".reader-toolbar"), false);
+  await shot("20-focus");
+  await page.goBack(); // Android back gesture
+  await page.waitForFunction(() => !document.querySelector(".reader.focus"));
+  assert.ok(await page.isVisible('[data-testid="scroller"]'), "still reading");
+  await page.click('[data-testid="focus-btn"]');
+  await page.waitForSelector(".reader.focus");
+  await page.click('[data-testid="focus-exit"]');
+  await page.waitForFunction(() => !document.querySelector(".reader.focus"));
+  await page.waitForTimeout(300);
+  assert.ok(await page.isVisible('[data-testid="scroller"]'), "exit button keeps you in the book");
   await backToShelf();
 });
 

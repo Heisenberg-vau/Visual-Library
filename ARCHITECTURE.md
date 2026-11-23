@@ -52,6 +52,12 @@ src/
   (so undo, eraser, saving and export come for free). The reader shows a
   notebook beside a book in a resizable split (`NotebookPane`); undo/redo
   follow the pane last written in; the last notebook per book reopens.
+- **Study** (`core/study`, `ui/study`): `StudyTimer` is a pure state machine
+  (clock passed in) that only *suggests* breaks; `StudySession` drives it
+  app-wide, logs focus time per day/book (`study` store) and survives reloads.
+  `PlannerView` manages tasks/deadlines (`tasks` store, DB v4). `Ambience`
+  adds screen-only overlays (dim, warm), page tone via CSS filters, and
+  Web Audio generated rain/brown/white noise.
 - **Input rules:** pen (and mouse, for laptops) writes; fingers only scroll and
   pinch. Stylus touches are `preventDefault`-ed so the page never scrolls under
   the pen, and touches are ignored for 250 ms after pen activity (palm).

@@ -7,12 +7,19 @@ import { confirmDialog, popupMenu, promptDialog, toast } from "../feedback";
 import { editTags, pickShelf } from "./dialogs";
 import { ShelfPanel, type ShelfView } from "./ShelfPanel";
 
+import type { StudySession } from "../study/StudySession";
+import { dueCount, type Task } from "../../core/study/tasks";
+import { dayKey } from "../../core/study/dates";
+
 export interface LibraryViewDeps {
   library: LibraryService;
   onOpen: (book: BookMeta) => void;
   onFirstImport: () => void;
   loadView: () => Promise<ShelfView>;
   saveView: (v: ShelfView) => void;
+  study: StudySession;
+  onPlanner: () => void;
+  loadTasks: () => Promise<Task[]>;
 }
 
 /** Bookshelf screen: shelves, tags, import, list, bulk actions. */
@@ -36,6 +43,7 @@ export class LibraryView {
   private selecting = false;
   private selected = new Set<string>();
   private viewLoaded = false;
+  private plannerBadge: HTMLElement;
 
   constructor(private readonly deps: LibraryViewDeps) {
     this.fileInput = h("input", {
@@ -67,6 +75,14 @@ export class LibraryView {
       html: `${icon("upload", 20)}<span>Nhập tài liệu</span>`,
       onclick: () => this.fileInput.click(),
     });
+    this.plannerBadge = h("span", { class: "badge", hidden: true, "data-testid": "planner-badge" });
+    const plannerBtn = h(
+      "button",
+      { class: "btn btn-planner", type: "button", "data-testid": "planner-btn", onclick: () => deps.onPlanner(), title: "Kế hoạch học" },
+      h("span", { html: icon("calendar", 19) }),
+      h("span", { class: "lbl" }, "Kế hoạch"),
+      this.plannerBadge,
+    );
     const notebookBtn = h("button", {
       class: "btn btn-notebook",
       type: "button",
@@ -117,6 +133,8 @@ export class LibraryView {
         menuBtn,
         h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("book", 26) }), h("h1", {}, "Visual Library")),
         h("div", { class: "lib-search" }, h("span", { class: "search-ic", html: icon("search", 18) }), this.filterInput),
+        deps.study.chip().el,
+        plannerBtn,
         selectBtn,
         notebookBtn,
         importBtn,
@@ -159,6 +177,12 @@ export class LibraryView {
     for (const id of [...this.selected]) if (!present.has(id)) this.selected.delete(id);
     this.renderAll();
     void this.updateStorageInfo();
+    void this.deps.loadTasks().then((tasks) => {
+      const n = dueCount(tasks, dayKey(new Date()));
+      this.plannerBadge.hidden = n === 0;
+      this.plannerBadge.textContent = String(n);
+      this.plannerBadge.title = `${n} việc đến hạn hoặc quá hạn`;
+    });
   }
 
   private setView(v: ShelfView): void {
@@ -531,7 +555,9 @@ export class LibraryView {
     );
     if (!ok) return;
     await this.deps.library.deleteCategory(id);
-    this.setView(c.parentId ? { kind: "shelf", id: c.parentId } : { kind: "all" });
+    // Navigate first, then reload, so nothing ever shows the deleted shelf.
+    this.view = c.parentId ? { kind: "shelf", id: c.parentId } : { kind: "all" };
+    this.deps.saveView(this.view);
     await this.refresh();
     toast("Đã xóa danh mục.");
   }

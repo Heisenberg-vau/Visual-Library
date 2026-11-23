@@ -10,6 +10,8 @@ import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
 import { InkLayer, type Tool, type ToolState } from "./InkLayer";
 import { NotebookPane, autoExtend, deletePageAsk, insertPageAfter } from "./NotebookPane";
+import type { Ambience } from "../study/Ambience";
+import type { StudySession } from "../study/StudySession";
 import { OutlinePanel } from "./OutlinePanel";
 import { PageScroller } from "./PageScroller";
 import { ThumbnailPanel } from "./ThumbnailPanel";
@@ -25,6 +27,8 @@ export interface ReaderDeps {
   onMargins: (m: Margins) => void;
   getFile: () => Promise<File>;
   notebooks: NotebookHost;
+  study: StudySession;
+  ambience: Ambience;
 }
 
 /** What the reader needs from the app to work with exercise books. */
@@ -91,6 +95,11 @@ export class ReaderView {
   private unsubGrow: (() => void) | null = null;
   private totalLabel: HTMLElement;
   private readonly isNotebook: boolean;
+  private chips: { el: HTMLButtonElement; dispose: () => void }[] = [];
+  private focusOn = false;
+  private pill: HTMLElement;
+  private pillPage: HTMLElement;
+  private pillTools = new Map<Tool, HTMLButtonElement>();
 
   constructor(private readonly deps: ReaderDeps) {
     const { book, doc } = deps;
@@ -214,6 +223,12 @@ export class ReaderView {
     toolGroup.append(exportBtn);
     if (!this.isNotebook) toolGroup.append(nbBtn);
 
+    const chip = deps.study.chip();
+    this.chips.push(chip);
+    const focusBtn = iconButton("focus", "Chế độ tập trung (toàn màn hình)", () => this.setFocus(true));
+    focusBtn.dataset.testid = "focus-btn";
+    const studyGroup = h("div", { class: "tool-group study-group" }, chip.el, deps.ambience.button(), focusBtn);
+
     const toolbar = h(
       "header",
       { class: "reader-toolbar" },
@@ -221,6 +236,7 @@ export class ReaderView {
       iconButton("panel", "Trang và mục lục", () => this.togglePanel(), "tb-panel"),
       h("div", { class: "reader-title", title: book.title }, book.title),
       toolGroup,
+      studyGroup,
       h(
         "div",
         { class: "page-nav" },
@@ -239,12 +255,42 @@ export class ReaderView {
     this.divider = h("div", { class: "split-divider", role: "separator", "aria-label": "Kéo để đổi tỉ lệ", "data-testid": "divider" }, h("span"));
     this.divider.addEventListener("pointerdown", this.onDividerDown);
     this.main = h("div", { class: "reader-main" }, this.scroller.el);
+    // Floating mini bar for focus mode.
+    this.pillPage = h("span", { class: "pill-page", "data-testid": "pill-page" });
+    const pillTool = (t: Tool, ic: string, label: string) => {
+      const b = iconButton(ic, label, () => this.setTool(t), "tool-btn");
+      b.dataset.tool = t;
+      this.pillTools.set(t, b);
+      return b;
+    };
+    const pillChip = deps.study.chip();
+    this.chips.push(pillChip);
+    const exitBtn = iconButton("close", "Thoát chế độ tập trung", () => this.setFocus(false));
+    exitBtn.dataset.testid = "focus-exit";
+    this.pill = h(
+      "div",
+      { class: "focus-pill", "data-testid": "focus-pill" },
+      pillTool("hand", "hand", "Chỉ đọc"),
+      pillTool("pen", "pen", "Bút"),
+      pillTool("highlighter", "highlighter", "Dạ quang"),
+      pillTool("eraser", "eraser", "Tẩy"),
+      iconButton("undo", "Hoàn tác", () => this.undo()),
+      h("span", { class: "pill-sep" }),
+      this.pillPage,
+      pillChip.el,
+      deps.ambience.button(),
+      exitBtn,
+    );
+
     this.el = h(
       "div",
       { class: `reader ${this.isNotebook ? "is-notebook" : ""}` },
       toolbar,
       h("div", { class: "reader-body" }, this.sidebar, this.main),
+      this.pill,
     );
+    window.addEventListener("popstate", this.onPopState);
+    document.addEventListener("fullscreenchange", this.onFullscreenChange);
     this.el.addEventListener("keydown", this.onKey);
     this.showTab("thumbs");
     this.updateZoomLabel();
@@ -267,9 +313,11 @@ export class ReaderView {
   }
 
   private renderTools(): void {
-    for (const [t, b] of this.toolButtons) {
-      b.classList.toggle("active", t === this.tools.tool);
-      b.setAttribute("aria-pressed", String(t === this.tools.tool));
+    for (const map of [this.toolButtons, this.pillTools]) {
+      for (const [t, b] of map) {
+        b.classList.toggle("active", t === this.tools.tool);
+        b.setAttribute("aria-pressed", String(t === this.tools.tool));
+      }
     }
     const c = this.currentColor();
     this.colorBtn.hidden = c === null;
@@ -350,6 +398,43 @@ export class ReaderView {
         run: () => apply({ ...cur, pattern: p.p }),
       })),
     ]);
+  }
+
+  // ---- focus mode -------------------------------------------------------
+
+  /** Full screen, no toolbars: only the pages and a small floating bar. */
+  setFocus(on: boolean, fromHistory = false): void {
+    if (on === this.focusOn) return;
+    this.focusOn = on;
+    this.el.classList.toggle("focus", on);
+    if (on) {
+      this.updatePill();
+      // A history entry so the Android back gesture leaves focus mode first.
+      history.pushState({ ...(history.state ?? {}), focus: true }, "", location.href);
+      document.documentElement.requestFullscreen?.({ navigationUI: "hide" }).catch(() => {});
+      if (this.panelOpen) this.togglePanel(false);
+    } else {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+      if (!fromHistory && history.state?.focus) history.back();
+    }
+    this.scroller.relayout();
+  }
+
+  get inFocus(): boolean {
+    return this.focusOn;
+  }
+
+  private onPopState = (): void => {
+    if (this.focusOn && !history.state?.focus) this.setFocus(false, true);
+  };
+
+  private onFullscreenChange = (): void => {
+    // Leaving full screen with the system gesture also leaves focus mode.
+    if (!document.fullscreenElement && this.focusOn && document.fullscreenEnabled) this.setFocus(false);
+  };
+
+  private updatePill(): void {
+    this.pillPage.textContent = `${this.scroller.currentPage} / ${this.deps.doc.numPages}`;
   }
 
   private async exportPdf(): Promise<void> {
@@ -589,6 +674,7 @@ export class ReaderView {
 
   private onPageChange(p: number): void {
     if (document.activeElement !== this.pageInput) this.pageInput.value = String(p);
+    if (this.focusOn) this.updatePill();
     this.thumbs.setCurrent(p);
     this.queueSave();
   }
@@ -624,6 +710,10 @@ export class ReaderView {
 
   private onKey = (e: KeyboardEvent): void => {
     if (e.target instanceof HTMLInputElement) return;
+    if (e.key === "Escape" && this.focusOn) {
+      this.setFocus(false);
+      return;
+    }
     const vh = this.scroller.el.clientHeight;
     if (e.key === "PageDown" || e.key === " ") {
       e.preventDefault();
@@ -650,6 +740,10 @@ export class ReaderView {
 
   async destroy(): Promise<void> {
     clearTimeout(this.saveTimer);
+    if (this.focusOn) this.setFocus(false, true);
+    window.removeEventListener("popstate", this.onPopState);
+    document.removeEventListener("fullscreenchange", this.onFullscreenChange);
+    for (const c of this.chips) c.dispose();
     document.removeEventListener("visibilitychange", this.onHide);
     this.savePosition();
     await this.closeNotebook(false);

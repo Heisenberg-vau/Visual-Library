@@ -1,7 +1,7 @@
 /** Minimal promise wrapper over IndexedDB (no dependency). */
 
 export const DB_NAME = "visual-library";
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 export const STORES = {
   books: "books", // BookMeta, keyPath id
@@ -10,6 +10,8 @@ export const STORES = {
   settings: "settings", // key/value
   categories: "categories", // Category, keyPath id (v2)
   ink: "ink", // PageInk per (book, page), keyPath key, index bookId (v3)
+  tasks: "tasks", // Task, keyPath id (v4)
+  study: "study", // StudyDay, keyPath date (v4)
 } as const;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -37,6 +39,9 @@ export function openDb(factory: IDBFactory = indexedDB): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORES.ink)) {
         db.createObjectStore(STORES.ink, { keyPath: "key" }).createIndex("bookId", "bookId", { unique: false });
       }
+      // v4: study planner and time log.
+      if (!db.objectStoreNames.contains(STORES.tasks)) db.createObjectStore(STORES.tasks, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(STORES.study)) db.createObjectStore(STORES.study, { keyPath: "date" });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => {

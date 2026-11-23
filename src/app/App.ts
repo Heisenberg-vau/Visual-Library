@@ -14,6 +14,10 @@ import { toast } from "../ui/feedback";
 import { LibraryView, type ShelfView } from "../ui/library/LibraryView";
 import { DEFAULT_TOOLS, type ToolState } from "../ui/reader/InkLayer";
 import { ReaderView, type NotebookHost } from "../ui/reader/ReaderView";
+import { StudyStore } from "../core/study/StudyStore";
+import { Ambience } from "../ui/study/Ambience";
+import { PlannerView } from "../ui/study/PlannerView";
+import { StudySession } from "../ui/study/StudySession";
 
 /** Composition root: builds the layers and switches between screens. */
 
@@ -38,25 +42,42 @@ export class App {
   private opening = false;
   private inkStore = new InkStore();
   private meta: MetaStore;
+  readonly studyStore = new StudyStore();
+  readonly ambience: Ambience;
+  readonly study: StudySession;
+  private planner: PlannerView | null = null;
 
   constructor(private readonly root: HTMLElement) {
     const meta = new MetaStore();
     this.meta = meta;
     this.library = new LibraryService(meta, createFileStore(), pdfInspector);
     this.library.onDelete((id) => this.inkStore.deleteBook(id));
+    this.ambience = new Ambience(meta);
+    this.study = new StudySession(
+      meta,
+      this.studyStore,
+      this.ambience.sound,
+      () => void this.openPlanner(),
+      (t) => (t.bookId ? void this.openAt(t.bookId, t.page) : void this.openPlanner()),
+    );
     this.libraryView = new LibraryView({
       library: this.library,
       onOpen: (b) => void this.open(b),
       onFirstImport: () => void requestPersistentStorage(),
       loadView: () => meta.getSetting<ShelfView>("libraryView", { kind: "all" }),
       saveView: (v) => void meta.setSetting("libraryView", v),
+      study: this.study,
+      onPlanner: () => void this.openPlanner(),
+      loadTasks: () => this.studyStore.listTasks(),
     });
     window.addEventListener("popstate", () => {
       if (this.reader && !location.hash.startsWith("#read/")) void this.closeReader(false);
+      if (this.planner && location.hash !== "#plan") void this.closePlanner();
     });
   }
 
   async start(): Promise<void> {
+    await Promise.all([this.ambience.init(), this.study.init()]);
     this.root.replaceChildren(this.libraryView.el);
     await this.libraryView.refresh();
     // Reload while reading -> reopen the same book.
@@ -66,6 +87,9 @@ export class App {
       history.replaceState(null, "", location.pathname + location.search);
       const b = await this.library.get(decodeURIComponent(m[1]));
       if (b) await this.open(b, true);
+    } else if (location.hash === "#plan") {
+      history.replaceState(null, "", location.pathname + location.search);
+      await this.openPlanner();
     }
   }
 
@@ -147,7 +171,10 @@ export class App {
         onMargins: (m) => void this.library.setMargins(book.id, m),
         getFile: () => this.library.readFile(book.id),
         notebooks: await this.notebookHost(fresh),
+        study: this.study,
+        ambience: this.ambience,
       });
+      this.study.bookId = book.id;
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);
       this.libraryView.el.remove();
       this.root.replaceChildren(this.reader.el);
@@ -162,10 +189,54 @@ export class App {
     }
   }
 
+  // ---- planner --------------------------------------------------------
+
+  async openPlanner(): Promise<void> {
+    if (this.planner) return;
+    if (this.reader) {
+      await this.closeReader(false, false);
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+    this.planner = new PlannerView({
+      store: this.studyStore,
+      library: this.library,
+      onBack: () => history.back(),
+      onOpenBook: (id, page) => void this.openAt(id, page),
+    });
+    history.pushState({ plan: true }, "", "#plan");
+    this.root.replaceChildren(this.planner.el);
+    await this.planner.refresh();
+    (window as unknown as { __planner?: PlannerView }).__planner = this.planner;
+  }
+
+  private async closePlanner(): Promise<void> {
+    if (!this.planner) return;
+    this.planner = null;
+    this.root.replaceChildren(this.libraryView.el);
+    await this.libraryView.refresh();
+  }
+
+  /** Opens a book (or notebook) at a page, e.g. from a planned task. */
+  async openAt(bookId: string, page: number | null): Promise<void> {
+    const b = await this.library.get(bookId);
+    if (!b) {
+      toast("Sách/vở này không còn trên kệ.", "error");
+      return;
+    }
+    if (page) await this.library.savePosition(b.id, Math.min(page, b.pageCount), b.zoom);
+    if (this.planner) {
+      this.planner = null;
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+    if (this.reader) await this.closeReader(false, false);
+    await this.open(b, true);
+  }
+
   private async closeReader(popHistory: boolean, showShelf = true): Promise<void> {
     const r = this.reader;
     if (!r) return;
     this.reader = null;
+    this.study.bookId = null;
     (window as unknown as { __reader?: ReaderView }).__reader = undefined;
     if (popHistory) history.back();
     await r.destroy();
