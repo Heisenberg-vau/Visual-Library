@@ -48,6 +48,7 @@ describe("export maths", () => {
 
   it("makes safe file names", () => {
     expect(exportFileName('Rolls-Royce: The "Jet" Engine')).toBe("Rolls-Royce The Jet Engine (ghi chu).pdf");
+    expect(exportFileName("Vở M15 – Động cơ")).toBe("Vo M15 - Dong co (ghi chu).pdf");
   });
 });
 

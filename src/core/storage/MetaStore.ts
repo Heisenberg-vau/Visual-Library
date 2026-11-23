@@ -5,6 +5,7 @@ import { STORES, tx, txMulti } from "./idb";
 function normalize(b: BookMeta): BookMeta {
   return {
     ...b,
+    kind: b.kind ?? "pdf",
     categoryId: b.categoryId ?? null,
     tags: Array.isArray(b.tags) ? b.tags : [],
     margins: b.margins ?? { left: 0, right: 0 },

@@ -8,7 +8,16 @@ import {
   PDFNumber,
   PDFOperator,
   PDFPage,
+  StandardFonts,
+  type PDFFont,
+  appendBezierCurve,
   appendQuadraticCurve,
+  fillAndStroke,
+  beginText,
+  endText,
+  setFontAndSize,
+  showText,
+  moveText,
   concatTransformationMatrix,
   fill,
   lineTo,
@@ -24,8 +33,9 @@ import {
   setStrokingRgbColor,
   stroke,
 } from "pdf-lib";
-import { HIGHLIGHT_OPACITY, strokeCommands } from "../annotations/path";
+import { HIGHLIGHT_OPACITY, linkArrow, strokeCommands } from "../annotations/path";
 import { PATTERN_SPACING, type PaperPattern, type Stroke } from "../annotations/types";
+import { LINK_FONT, asciiFold } from "../notebook/links";
 
 /**
  * Builds the "annotated copy" of a PDF. Runs in a Web Worker; never touches
@@ -50,10 +60,15 @@ export interface PageJob {
   marginLeft: number;
   marginRight: number;
   pattern: PaperPattern;
+  /** Notebook pages: paper pattern over the whole page. */
+  fullPaper?: PaperPattern;
 }
 
 export interface ExportRequest {
-  bytes: ArrayBuffer;
+  /** Original PDF, or null to start from blank pages (notebooks). */
+  bytes: ArrayBuffer | null;
+  /** With bytes = null: how many blank pages and their size. */
+  blank?: { count: number; width: number; height: number };
   jobs: PageJob[];
   /** Keep only these 0-based pages (in order); null = all pages. */
   keepPages: number[] | null;
@@ -163,11 +178,76 @@ function paperOps(job: PageJob): PDFOperator[] {
   return ops;
 }
 
-function inkOps(doc: PDFDocument, page: PDFPage, job: PageJob): PDFOperator[] {
+function fullPaperOps(job: PageJob): PDFOperator[] {
+  const p = job.fullPaper;
+  if (!p || p === "blank") return [];
+  const sp = PATTERN_SPACING;
+  const { width: w, height: h } = job;
+  const ops: PDFOperator[] = [];
+  if (p === "lines" || p === "grid") {
+    const [r, g, b] = p === "lines" ? rgb("#cfd8e6") : rgb("#dfe4ec");
+    ops.push(setStrokingRgbColor(r, g, b), setLineWidth(0.5), setLineCap(LineCapStyle.Butt));
+    for (let y = p === "lines" ? sp * 3 : sp; y < h; y += sp) ops.push(moveTo(0, y), lineTo(w, y));
+    if (p === "grid") for (let x = sp; x < w; x += sp) ops.push(moveTo(x, 0), lineTo(x, h));
+    ops.push(stroke());
+    if (p === "lines") {
+      const [r2, g2, b2] = rgb("#efb4b4");
+      ops.push(setStrokingRgbColor(r2, g2, b2), moveTo(sp * 3.5, 0), lineTo(sp * 3.5, h), stroke());
+    }
+  } else if (p === "dots") {
+    const [r, g, b] = rgb("#b7c0cf");
+    ops.push(setStrokingRgbColor(r, g, b), setLineWidth(1.6), setLineCap(LineCapStyle.Round));
+    for (let y = sp; y < h; y += sp) for (let x = sp; x < w; x += sp) ops.push(moveTo(x, y), lineTo(x + 0.01, y));
+    ops.push(stroke());
+  }
+  return ops;
+}
+
+function linkOps(s: Stroke, font: PDFFont, fontName: PDFName): PDFOperator[] {
+  if (!s.rects || !s.link) return [];
+  const [x, y, w, h] = s.rects;
+  const r = h / 2;
+  const k = 0.5523 * r;
+  const [cr, cg, cb] = rgb(s.color);
+  const label = asciiFold(s.link.label);
+  return [
+    // pill shape
+    setFillingRgbColor(0.91, 0.94, 0.98),
+    setStrokingRgbColor(cr, cg, cb),
+    setLineWidth(0.8),
+    moveTo(x + r, y),
+    lineTo(x + w - r, y),
+    appendBezierCurve(x + w - r + k, y, x + w, y + r - k, x + w, y + r),
+    appendBezierCurve(x + w, y + r + k, x + w - r + k, y + h, x + w - r, y + h),
+    lineTo(x + r, y + h),
+    appendBezierCurve(x + r - k, y + h, x, y + r + k, x, y + r),
+    appendBezierCurve(x, y + r - k, x + r - k, y, x + r, y),
+    fillAndStroke(),
+    // arrow
+    setLineWidth(1.3),
+    setLineCap(LineCapStyle.Round),
+    ...((a) => [moveTo(a[0], a[1]), lineTo(a[2], a[3]), moveTo(a[4], a[5]), lineTo(a[6], a[7]), lineTo(a[8], a[9])])(linkArrow(x, y, h)),
+    stroke(),
+    // text: undo the y-flip locally so glyphs are upright
+    setFillingRgbColor(cr, cg, cb),
+    pushGraphicsState(),
+    concatTransformationMatrix(1, 0, 0, -1, x + 18, y + h / 2 + LINK_FONT * 0.35),
+    beginText(),
+    setFontAndSize(fontName, LINK_FONT),
+    moveText(0, 0),
+    showText(font.encodeText(label)),
+    endText(),
+    popGraphicsState(),
+  ];
+}
+
+function inkOps(doc: PDFDocument, page: PDFPage, job: PageJob, font: PDFFont | null): PDFOperator[] {
   const ops: PDFOperator[] = [pushGraphicsState(), concatTransformationMatrix(...job.toPdf)];
+  ops.push(...fullPaperOps(job));
   ops.push(...paperOps(job));
   const highlights = job.strokes.filter((s) => s.tool === "highlighter");
-  const ink = job.strokes.filter((s) => s.tool !== "highlighter");
+  const ink = job.strokes.filter((s) => s.tool !== "highlighter" && s.tool !== "link");
+  const links = job.strokes.filter((s) => s.tool === "link");
   if (highlights.length) {
     const gs = doc.context.obj({
       Type: "ExtGState",
@@ -195,9 +275,15 @@ function inkOps(doc: PDFDocument, page: PDFPage, job: PageJob): PDFOperator[] {
     ops.push(setStrokingRgbColor(r, g, b), setLineWidth(s.width), setLineCap(LineCapStyle.Round), setLineJoin(LineJoinStyle.Round));
     ops.push(...pathOps(s.points), stroke());
   }
+  if (links.length && font) {
+    const fontName = page.node.newFontDictionary(font.name, font.ref);
+    for (const s of links) ops.push(...linkOps(s, font, fontName));
+  }
   ops.push(popGraphicsState());
   return ops;
 }
+
+
 
 export async function exportAnnotatedPdf(
   req: ExportRequest,
@@ -219,7 +305,13 @@ async function build(
   onProgress?.(0, "load");
   let doc: PDFDocument;
   try {
-    doc = await PDFDocument.load(req.bytes, { updateMetadata: false });
+    if (req.bytes) {
+      doc = await PDFDocument.load(req.bytes, { updateMetadata: false });
+    } else {
+      doc = await PDFDocument.create();
+      const b = req.blank ?? { count: 1, width: 595, height: 842 };
+      for (let i = 0; i < b.count; i++) doc.addPage([b.width, b.height]);
+    }
   } catch (e) {
     if (e instanceof EncryptedPDFError) {
       throw new ExportError("File PDF này được bảo vệ (mã hóa) nên chưa xuất được bản có ghi chú.");
@@ -227,12 +319,14 @@ async function build(
     throw new ExportError("Không đọc được cấu trúc file PDF để xuất.");
   }
   const pages = doc.getPages();
+  const needsFont = req.jobs.some((j) => j.strokes.some((s) => s.tool === "link"));
+  const font = needsFont ? await doc.embedFont(StandardFonts.Helvetica) : null;
   req.jobs.forEach((job, k) => {
     const page = pages[job.index];
     if (!page) return;
     if (job.marginLeft > 0 || job.marginRight > 0) widenBoxes(page, job);
     isolateExistingContent(doc, page);
-    page.pushOperators(...inkOps(doc, page, job));
+    page.pushOperators(...inkOps(doc, page, job, font));
     onProgress?.((k + 1) / Math.max(1, req.jobs.length), "draw");
   });
   if (req.keepPages) {

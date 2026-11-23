@@ -1,6 +1,7 @@
 /** Domain types shared by every layer. No DOM, no pdf.js here. */
 
-export type DocKind = "pdf"; // "docx" arrives in milestone 6
+/** "notebook" = a blank exercise book written in the app (milestone 5). */
+export type DocKind = "pdf" | "notebook"; // "docx" arrives later
 
 export interface BookMeta {
   id: string;
@@ -24,6 +25,8 @@ export interface BookMeta {
   tags: string[];
   /** Widened writing margin beside every page (fractions of page width). */
   margins: { left: number; right: number; pattern?: "blank" | "lines" | "grid" | "dots" };
+  /** Notebooks only: paper of every page. */
+  paper?: "blank" | "lines" | "grid" | "dots";
 }
 
 /** A shelf. Shelves nest: "Hàng không" > "Động cơ". */

@@ -1,6 +1,7 @@
 import type { InkModel } from "../annotations/InkModel";
-import type { Margins, Stroke } from "../annotations/types";
+import type { Margins, PaperPattern, Stroke } from "../annotations/types";
 import type { PagedDocument } from "../pdf/PagedDocument";
+import { asciiFold } from "../notebook/links";
 import { invert, type Matrix, type PageJob } from "./exportPdf";
 
 export interface ExportOptions {
@@ -84,11 +85,12 @@ export async function buildExportJobs(
 
 /** Runs the export in a worker. */
 export function runExportWorker(
-  file: Blob,
+  file: Blob | null,
   jobs: PageJob[],
   keepPages: number[] | null,
   title: string,
   onProgress: (fraction: number, phase: string) => void,
+  blank?: { count: number; width: number; height: number },
 ): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL("./export.worker.ts", import.meta.url), { type: "module" });
@@ -108,16 +110,43 @@ export function runExportWorker(
       w.terminate();
       reject(new Error(e.message || "worker failed"));
     };
-    w.postMessage({ file, jobs, keepPages, title });
+    w.postMessage({ file, jobs, keepPages, title, blank });
   });
 }
 
 /** "Rolls-Royce: The Jet Engine" -> "Rolls-Royce The Jet Engine (ghi chu).pdf" */
 export function exportFileName(title: string): string {
-  const base = title
+  // ASCII only: some download managers and chat apps mangle accents.
+  const base = asciiFold(title)
+    .replace(/\?/g, "")
     .replace(/[\\/:*?"<>|]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 120) || "tai-lieu";
   return `${base} (ghi chu).pdf`;
+}
+
+/** Jobs for a notebook: every kept page gets its paper, plus any ink. */
+export function buildNotebookJobs(
+  pageCount: number,
+  size: { width: number; height: number },
+  paper: PaperPattern,
+  ink: InkModel,
+  scope: ExportOptions["scope"],
+): { jobs: PageJob[]; keepPages: number[] | null; blank: { count: number; width: number; height: number } } {
+  const inked = ink.pagesWithInk();
+  const toPdf: Matrix = [1, 0, 0, -1, 0, size.height];
+  const pages = Array.from({ length: pageCount }, (_, i) => i);
+  const jobs: PageJob[] = pages.map((i) => ({
+    index: i,
+    toPdf,
+    width: size.width,
+    height: size.height,
+    strokes: [...ink.strokes(i)],
+    marginLeft: 0,
+    marginRight: 0,
+    pattern: paper,
+    fullPaper: paper,
+  }));
+  return { jobs, keepPages: scope === "annotated" ? inked : null, blank: { count: pageCount, ...size } };
 }

@@ -160,7 +160,7 @@ test("table of contents navigates to a chapter", async () => {
 
 test("thumbnails show the current page and navigate", async () => {
   await page.click('.tab[data-tab="thumbs"]');
-  await page.waitForSelector(".thumb.current .thumb-canvas", { timeout: 15000 });
+  await page.waitForSelector(".thumb.current .thumb-canvas", { timeout: 30000 }); // queued behind full-resolution page renders
   await page.waitForFunction(() => Number(document.querySelector(".thumb.current")?.dataset.page) === window.__reader.scrollerForTests.currentPage, null, { timeout: 5000 });
   const target = page.locator(".thumb").filter({ has: page.locator(".thumb-canvas") }).last();
   const n = Number(await target.getAttribute("data-page"));
@@ -223,9 +223,11 @@ async function cdp() {
   return cdpSession;
 }
 /** Draws with a simulated pen. pts are [x, y] fractions of the page slot box. */
+const BOOK = ".reader-main > .pages-scroller:first-child";
+const NB = ".nb-pane";
 async function penStroke(pageNo, pts, opts = {}) {
   const c = await cdp();
-  const box = await page.locator(`.page-slot[data-page="${pageNo}"]`).boundingBox();
+  const box = await page.locator(`${opts.root ?? BOOK} .page-slot[data-page="${pageNo}"]`).boundingBox();
   const at = ([fx, fy]) => ({ x: box.x + fx * box.width, y: box.y + fy * box.height });
   const pointerType = opts.pointerType ?? "pen";
   const steps = [];
@@ -469,6 +471,116 @@ test("milestone 4: whole-document export, then the result opens with the notes b
   await page.locator(".menu-item", { hasText: "Xóa" }).click();
   await page.locator(".modal .btn-primary").click();
   await page.waitForFunction(() => ![...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("ghi chú")));
+});
+
+// ---- milestone 5: notebooks and split view ----
+
+const nbStrokes = (pageNo) => page.evaluate((n) => window.__reader.notebookPaneForTests.inkModel.strokes(n - 1).map((s) => ({ tool: s.tool, link: s.link, rects: s.rects })), pageNo);
+
+test("milestone 5: create a notebook; it grows when you write on the last page", async () => {
+  await page.click('[data-testid="new-notebook"]');
+  await prompt("Vở M15 – Động cơ");
+  await page.waitForSelector('[data-testid="scroller"]');
+  assert.equal(await page.textContent('[data-testid="page-total"]'), "/ 2");
+  await gotoPage(2);
+  await tool("pen");
+  await penStroke(2, [[0.2, 0.15], [0.5, 0.2], [0.7, 0.15]]);
+  await page.waitForFunction(() => document.querySelector('[data-testid="page-total"]').textContent === "/ 3");
+  await shot("14-notebook");
+  await backToShelf();
+  assert.match(await cards().filter({ hasText: "Vở M15" }).textContent(), /Vở · 3 trang/);
+});
+
+test("milestone 5: open the notebook beside a book (split view)", async () => {
+  await openBook("650");
+  await page.click('[data-testid="nb-btn"]');
+  await page.locator('[data-testid="nb-choice"]', { hasText: "Vở M15" }).click();
+  await page.waitForSelector(`${NB} .page-slot[data-page="1"] canvas`);
+  const book = await page.locator(BOOK).boundingBox();
+  const nb = await page.locator(`${NB} .pages-scroller`).boundingBox();
+  assert.ok(book.width > 400 && nb.width > 400, "both panes usable");
+  assert.ok(nb.x > book.x + book.width - 5, "notebook on the right in landscape");
+});
+
+test("milestone 5: pin the current book page into the notebook, tap it to jump back", async () => {
+  await gotoPage(123);
+  await page.evaluate(() => window.__reader.notebookPaneForTests.scroller.goToPage(1));
+  await page.waitForSelector(`${NB} .page-slot[data-page="1"] canvas`);
+  await page.click('[data-testid="nb-link"]');
+  await penStroke(1, [[0.3, 0.12], [0.3, 0.12]], { root: NB });
+  const [link] = (await nbStrokes(1)).filter((s) => s.tool === "link");
+  assert.ok(link, "link tag placed");
+  assert.equal(link.link.page, 123);
+  assert.match(link.link.label, /tr\. 123$/);
+  await gotoPage(5);
+  // Finger tap on the tag
+  const slot = await page.locator(`${NB} .page-slot[data-page="1"]`).boundingBox();
+  const k = slot.width / 595;
+  const x = slot.x + (link.rects[0] + link.rects[2] / 2) * k;
+  const y = slot.y + (link.rects[1] + link.rects[3] / 2) * k;
+  const c = await cdp();
+  await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+  await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForFunction(() => window.__reader.scrollerForTests.currentPage === 123, null, { timeout: 5000 });
+  await shot("15-split-link");
+});
+
+test("milestone 5: undo acts on the pane you last wrote in", async () => {
+  const bookBefore = (await strokesOn(123)).length;
+  await penStroke(1, [[0.2, 0.4], [0.6, 0.45]], { root: NB });
+  const nbCount = (await nbStrokes(1)).length;
+  await page.click('[data-testid="undo"]');
+  assert.equal((await nbStrokes(1)).length, nbCount - 1);
+  assert.equal((await strokesOn(123)).length, bookBefore);
+});
+
+test("milestone 5: the divider resizes the panes and is remembered", async () => {
+  const d = await page.locator('[data-testid="divider"]').boundingBox();
+  const c = await cdp();
+  const y = d.y + d.height / 2;
+  await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x: d.x + d.width / 2, y, button: "left", buttons: 1, clickCount: 1 });
+  for (let x = d.x; x >= 450; x -= 40) await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 });
+  await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 450, y, button: "left", buttons: 0, clickCount: 1 });
+  const book = await page.locator(BOOK).boundingBox();
+  assert.ok(Math.abs(book.width - 450) < 30, `book pane now ~450px (${book.width})`);
+  await backToShelf();
+  await openBook("650");
+  await page.waitForSelector(NB);
+  const again = await page.locator(BOOK).boundingBox();
+  assert.ok(Math.abs(again.width - book.width) < 5, "notebook reopened beside the book with the same split");
+  await page.click('[data-testid="nb-close"]');
+  await page.waitForFunction(() => !document.querySelector(".nb-pane"));
+  await backToShelf();
+});
+
+test("milestone 5: a link inside a full-screen notebook opens the book beside it", async () => {
+  await cards().filter({ hasText: "Vở M15" }).click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  await gotoPage(1);
+  await page.waitForTimeout(300);
+  const link = await page.evaluate(() => window.__reader.inkForTests.strokes(0).find((s) => s.tool === "link"));
+  const slot = await page.locator(`${BOOK} .page-slot[data-page="1"]`).boundingBox();
+  const k = slot.width / 595;
+  const c = await cdp();
+  const x = slot.x + (link.rects[0] + link.rects[2] / 2) * k;
+  const y = slot.y + (link.rects[1] + link.rects[3] / 2) * k;
+  await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+  await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForFunction(() => document.querySelector(".reader-title")?.textContent.includes("650") && document.querySelector(".nb-pane"), null, { timeout: 10000 });
+  await waitRendered(123);
+  assert.equal(await currentPage(), 123);
+  await page.click('[data-testid="nb-close"]');
+  await backToShelf();
+});
+
+test("milestone 5: export a notebook to PDF", async () => {
+  await cards().filter({ hasText: "Vở M15" }).click();
+  await page.waitForSelector('[data-testid="scroller"]');
+  const { path, name } = await exportVia("Toàn bộ");
+  assert.equal(name, "Vo M15 - Dong co (ghi chu).pdf");
+  const doc = await PDFDocument.load(readFileSync(path));
+  assert.equal(doc.getPageCount(), 3);
+  await backToShelf();
 });
 
 test("works offline after the first visit", async () => {

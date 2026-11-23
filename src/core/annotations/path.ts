@@ -1,3 +1,10 @@
+import { LINK_FONT } from "../notebook/links";
+
+/** Arrow icon of a link tag, relative to the tag box. */
+export function linkArrow(x: number, y: number, h: number): number[] {
+  const cy = y + h / 2;
+  return [x + 8, cy + 3.5, x + 14, cy - 3.5, x + 10, cy - 3.5, x + 14, cy - 3.5, x + 14, cy + 0.5];
+}
 import type { Stroke } from "./types";
 
 /**
@@ -45,8 +52,22 @@ export function svgRectsData(rects: number[]): string {
 export const HIGHLIGHT_OPACITY = 0.38;
 
 /** SVG markup of one stroke (coordinates in PDF points). */
+const xmlEscape = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
 export function strokeSvg(s: Stroke): string {
   const esc = s.color.replace(/[^#0-9a-zA-Z(),.%\s]/g, "");
+  if (s.tool === "link" && s.rects && s.link) {
+    const [x, y, w, h] = s.rects;
+    return (
+      `<g class="ink-link" data-id="${xmlEscape(s.id)}">` +
+      `<rect x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" rx="${f(h / 2)}" fill="#e8f0fb" stroke="${esc}" stroke-width="0.8"/>` +
+      `<path d="${(() => {
+        const a = linkArrow(x, y, h);
+        return `M${f(a[0])} ${f(a[1])}L${f(a[2])} ${f(a[3])}M${f(a[4])} ${f(a[5])}L${f(a[6])} ${f(a[7])}L${f(a[8])} ${f(a[9])}`;
+      })()}" fill="none" stroke="${esc}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>` +
+      `<text x="${f(x + 18)}" y="${f(y + h / 2 + LINK_FONT * 0.35)}" font-size="${LINK_FONT}" font-family="system-ui, sans-serif" fill="${esc}">${xmlEscape(s.link.label)}</text></g>`
+    );
+  }
   if (s.tool === "highlighter") {
     if (s.rects?.length) return `<path d="${svgRectsData(s.rects)}" fill="${esc}" fill-opacity="${HIGHLIGHT_OPACITY}"/>`;
     return `<path d="${svgPathData(s.points)}" fill="none" stroke="${esc}" stroke-opacity="${HIGHLIGHT_OPACITY}" stroke-width="${s.width}" stroke-linecap="butt" stroke-linejoin="round"/>`;

@@ -1,12 +1,15 @@
 import type { InkModel } from "../../core/annotations/InkModel";
-import type { Margins, PaperPattern } from "../../core/annotations/types";
+import type { Margins, PageLink, PaperPattern } from "../../core/annotations/types";
+import { linkLabel } from "../../core/notebook/links";
+import type { NotebookDocument } from "../../core/notebook/NotebookDocument";
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
-import { h, iconButton } from "../dom";
-import { popupMenu, toast } from "../feedback";
+import { h, icon, iconButton } from "../dom";
+import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
 import { InkLayer, type Tool, type ToolState } from "./InkLayer";
+import { NotebookPane, autoExtend } from "./NotebookPane";
 import { OutlinePanel } from "./OutlinePanel";
 import { PageScroller } from "./PageScroller";
 import { ThumbnailPanel } from "./ThumbnailPanel";
@@ -21,6 +24,23 @@ export interface ReaderDeps {
   onToolsChange: (t: ToolState) => void;
   onMargins: (m: Margins) => void;
   getFile: () => Promise<File>;
+  notebooks: NotebookHost;
+}
+
+/** What the reader needs from the app to work with exercise books. */
+export interface NotebookHost {
+  list(): Promise<BookMeta[]>;
+  create(name: string, paper: PaperPattern): Promise<BookMeta>;
+  open(id: string): Promise<{ meta: BookMeta; doc: NotebookDocument; ink: InkModel }>;
+  setPageCount(id: string, n: number): void;
+  savePosition(id: string, page: number, zoom: number): void;
+  /** Notebook last opened beside this book (reopened automatically). */
+  companionId: string | null;
+  setCompanion(notebookId: string | null): void;
+  /** Follow a link to a different book (keeps this notebook beside it). */
+  openLink(link: PageLink, notebookId: string | null): void;
+  splitRatio: number;
+  saveSplitRatio(r: number): void;
 }
 
 const PEN_COLORS = ["#1d2430", "#1f5fbf", "#d03a2f", "#1e8a4c", "#7b3fb5", "#e07a12"];
@@ -62,10 +82,21 @@ export class ReaderView {
   private colorBtn: HTMLButtonElement;
   private undoBtn: HTMLButtonElement;
   private redoBtn: HTMLButtonElement;
+  private main: HTMLElement;
+  private divider: HTMLElement;
+  private nbPane: NotebookPane | null = null;
+  /** Undo/redo act on the pane last written in. */
+  private activeInk: InkModel;
+  private activeScroller: PageScroller;
+  private unsubGrow: (() => void) | null = null;
+  private totalLabel: HTMLElement;
+  private readonly isNotebook: boolean;
 
   constructor(private readonly deps: ReaderDeps) {
     const { book, doc } = deps;
+    this.isNotebook = book.kind === "notebook";
     this.tools = { ...deps.tools };
+    this.activeInk = deps.ink;
     this.scroller = new PageScroller(doc, this.scheduler, {
       initialPage: book.lastPage,
       initialZoom: book.zoom,
@@ -123,7 +154,14 @@ export class ReaderView {
       h("div", { class: "sidebar-body" }, this.thumbs.el, this.outline.el),
     );
 
-    this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory(), (p) => doc.textChars(p));
+    this.activeScroller = this.scroller;
+    this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory(), (p) => doc.textChars(p), {
+      onActivity: () => this.setActive(deps.ink, this.scroller),
+      onLinkTap: (link) => this.followLink(link, this.isNotebook ? book.id : null),
+    });
+    if (this.isNotebook) {
+      this.unsubGrow = autoExtend(doc as NotebookDocument, deps.ink, (n) => this.mainGrown(n));
+    }
     const toolGroup = h("div", { class: "tool-group", "data-testid": "tools" });
     const toolDefs: [Tool, string, string][] = [
       ["hand", "hand", "Chỉ đọc (bút cũng cuộn trang)"],
@@ -154,7 +192,15 @@ export class ReaderView {
     marginBtn.dataset.testid = "margin-btn";
     const exportBtn = iconButton("exportPdf", "Xuất bản có ghi chú (PDF mới)", () => void this.exportPdf());
     exportBtn.dataset.testid = "export-btn";
-    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, marginBtn, exportBtn);
+    const nbBtn = iconButton("notebook", "Mở vở ghi chép bên cạnh", () => void this.chooseNotebook(nbBtn));
+    nbBtn.dataset.testid = "nb-btn";
+    const addPageBtn = iconButton("addPage", "Thêm trang vào cuối vở", () => {
+      this.mainGrown((doc as NotebookDocument).addPages(1));
+      this.scroller.goToPage(doc.numPages);
+    });
+    addPageBtn.dataset.testid = "add-page";
+    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, this.isNotebook ? addPageBtn : marginBtn, exportBtn);
+    if (!this.isNotebook) toolGroup.append(nbBtn);
 
     const toolbar = h(
       "header",
@@ -167,7 +213,7 @@ export class ReaderView {
         "div",
         { class: "page-nav" },
         this.pageInput,
-        h("span", { class: "page-total", "data-testid": "page-total" }, `/ ${doc.numPages}`),
+        (this.totalLabel = h("span", { class: "page-total", "data-testid": "page-total" }, `/ ${doc.numPages}`)),
       ),
       h(
         "div",
@@ -178,11 +224,14 @@ export class ReaderView {
       ),
     );
 
+    this.divider = h("div", { class: "split-divider", role: "separator", "aria-label": "Kéo để đổi tỉ lệ", "data-testid": "divider" }, h("span"));
+    this.divider.addEventListener("pointerdown", this.onDividerDown);
+    this.main = h("div", { class: "reader-main" }, this.scroller.el);
     this.el = h(
       "div",
-      { class: "reader" },
+      { class: `reader ${this.isNotebook ? "is-notebook" : ""}` },
       toolbar,
-      h("div", { class: "reader-body" }, this.sidebar, this.scroller.el),
+      h("div", { class: "reader-body" }, this.sidebar, this.main),
     );
     this.el.addEventListener("keydown", this.onKey);
     this.showTab("thumbs");
@@ -298,33 +347,199 @@ export class ReaderView {
       margins: this.scroller.currentMargins,
       title: this.deps.book.title,
       getFile: this.deps.getFile,
+      notebookPaper: this.isNotebook ? (this.deps.doc as NotebookDocument).pattern : undefined,
     });
   }
 
+  // ---- notebooks --------------------------------------------------------
+
+  private setActive(ink: InkModel, scroller: PageScroller): void {
+    if (this.activeInk === ink) return;
+    this.activeInk = ink;
+    this.activeScroller = scroller;
+    this.el.classList.toggle("nb-active", ink !== this.deps.ink);
+    this.updateHistory();
+  }
+
+  private mainGrown(n: number): void {
+    this.deps.notebooks.setPageCount(this.deps.book.id, n);
+    this.scroller.relayout();
+    this.thumbs.pagesChanged();
+    this.totalLabel.textContent = `/ ${n}`;
+  }
+
+  private followLink(link: PageLink, fromNotebook: string | null): void {
+    if (link.bookId === this.deps.book.id) {
+      this.scroller.goToPage(link.page, true);
+    } else {
+      this.deps.notebooks.openLink(link, fromNotebook);
+    }
+  }
+
+  private async chooseNotebook(anchor: HTMLElement): Promise<void> {
+    if (this.nbPane) {
+      popupMenu(anchor, [
+        { label: "Đổi sang vở khác…", run: () => void this.pickNotebook() },
+        { label: "Đóng vở", run: () => void this.closeNotebook() },
+      ]);
+      return;
+    }
+    await this.pickNotebook();
+  }
+
+  private async pickNotebook(): Promise<void> {
+    const list = (await this.deps.notebooks.list()).sort((a, b) => (b.lastOpenedAt ?? b.addedAt) - (a.lastOpenedAt ?? a.addedAt));
+    const chosen = await modal((close) => {
+      const name = h("input", { class: "text-input", type: "text", placeholder: "Tên vở mới, ví dụ: Vở M15 – Động cơ", "data-testid": "nb-new-name" });
+      const paper = h(
+        "select",
+        { class: "text-input", "aria-label": "Kiểu giấy", "data-testid": "nb-new-paper" },
+        h("option", { value: "lines" }, "Kẻ dòng"),
+        h("option", { value: "grid" }, "Ô vuông"),
+        h("option", { value: "dots" }, "Chấm"),
+        h("option", { value: "blank" }, "Giấy trơn"),
+      );
+      const form = h(
+        "form",
+        { class: "nb-new" },
+        name,
+        paper,
+        h("button", { class: "btn btn-primary", type: "submit", "data-testid": "nb-create" }, "Tạo vở"),
+      );
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        try {
+          const nb = await this.deps.notebooks.create(name.value, paper.value as PaperPattern);
+          close(nb.id);
+        } catch (err) {
+          toast(err instanceof Error ? err.message : "Không tạo được vở.", "error");
+        }
+      });
+      const rows = list.map((nb) =>
+        h(
+          "button",
+          { class: "picker-row", type: "button", "data-testid": "nb-choice", onclick: () => close(nb.id) },
+          h("span", { class: "picker-ic", html: icon("notebook", 18) }),
+          h("span", { class: "picker-label" }, nb.title),
+          h("span", { class: "muted small" }, `${nb.pageCount} trang`),
+        ),
+      );
+      return h(
+        "div",
+        { class: "modal modal-wide", role: "dialog", "aria-modal": "true", "data-testid": "nb-picker" },
+        h("h2", {}, "Mở vở bên cạnh sách"),
+        rows.length ? h("div", { class: "picker-list" }, ...rows) : h("p", {}, "Bạn chưa có vở nào. Tạo vở đầu tiên bên dưới."),
+        h("h4", { class: "nb-new-title" }, "Hoặc tạo vở mới (cùng danh mục với sách này)"),
+        form,
+        h("div", { class: "modal-actions" }, h("button", { class: "btn", type: "button", onclick: () => close(null) }, "Hủy")),
+      );
+    });
+    if (typeof chosen === "string") await this.openNotebook(chosen);
+  }
+
+  async openNotebook(id: string): Promise<void> {
+    if (this.nbPane?.id === id) return;
+    await this.closeNotebook(false);
+    let opened;
+    try {
+      opened = await this.deps.notebooks.open(id);
+    } catch {
+      toast("Không mở được vở này (có thể đã bị xóa).", "error");
+      this.deps.notebooks.setCompanion(null);
+      return;
+    }
+    const { meta, doc, ink } = opened;
+    const host = this.deps.notebooks;
+    let pane: NotebookPane;
+    pane = new NotebookPane({
+      meta,
+      doc,
+      ink,
+      tools: () => this.tools,
+      onActivity: () => this.setActive(ink, pane.scroller),
+      onHistory: () => this.updateHistory(),
+      currentBookLink: () =>
+        this.isNotebook
+          ? null
+          : { bookId: this.deps.book.id, page: this.scroller.currentPage, label: linkLabel(this.deps.book.title, this.scroller.currentPage) },
+      onLinkTap: (link) => this.followLink(link, meta.id),
+      onClose: () => void this.closeNotebook(),
+      onPageCount: (n) => host.setPageCount(meta.id, n),
+      onPosition: (page, zoom) => host.savePosition(meta.id, page, zoom),
+    });
+    this.nbPane = pane;
+    this.main.append(this.divider, pane.el);
+    this.el.classList.add("split");
+    this.applyRatio(host.splitRatio);
+    pane.start();
+    host.setCompanion(meta.id);
+  }
+
+  async closeNotebook(forget = true): Promise<void> {
+    const pane = this.nbPane;
+    if (!pane) return;
+    this.nbPane = null;
+    if (this.activeInk !== this.deps.ink) this.setActive(this.deps.ink, this.scroller);
+    await pane.destroy();
+    this.divider.remove();
+    this.el.classList.remove("split");
+    this.scroller.el.style.flexBasis = "";
+    if (forget) this.deps.notebooks.setCompanion(null);
+    this.scroller.relayout();
+  }
+
+  private applyRatio(r: number): void {
+    const ratio = Math.min(0.8, Math.max(0.2, r));
+    this.scroller.el.style.flexBasis = `${ratio * 100}%`;
+  }
+
+  private onDividerDown = (e: PointerEvent): void => {
+    e.preventDefault();
+    this.divider.setPointerCapture(e.pointerId);
+    const rect = this.main.getBoundingClientRect();
+    const vertical = getComputedStyle(this.main).flexDirection === "column";
+    let ratio = this.deps.notebooks.splitRatio;
+    const move = (ev: PointerEvent) => {
+      ratio = vertical ? (ev.clientY - rect.top) / rect.height : (ev.clientX - rect.left) / rect.width;
+      this.applyRatio(ratio);
+    };
+    const up = () => {
+      this.divider.removeEventListener("pointermove", move);
+      this.divider.removeEventListener("pointerup", up);
+      this.divider.removeEventListener("pointercancel", up);
+      this.deps.notebooks.saveSplitRatio(Math.min(0.8, Math.max(0.2, ratio)));
+    };
+    this.divider.addEventListener("pointermove", move);
+    this.divider.addEventListener("pointerup", up);
+    this.divider.addEventListener("pointercancel", up);
+  };
+
   private undo(): void {
-    const p = this.deps.ink.undo();
+    const p = this.activeInk.undo();
     if (p !== null) this.revealPage(p);
   }
 
   private redo(): void {
-    const p = this.deps.ink.redo();
+    const p = this.activeInk.redo();
     if (p !== null) this.revealPage(p);
   }
 
   /** After undo on a page that is off-screen, take the reader there. */
   private revealPage(p: number): void {
-    if (!this.scroller.slotElement(p)) this.scroller.goToPage(p + 1);
+    if (!this.activeScroller.slotElement(p)) this.activeScroller.goToPage(p + 1);
   }
 
   private updateHistory(): void {
-    this.undoBtn.disabled = !this.deps.ink.canUndo;
-    this.redoBtn.disabled = !this.deps.ink.canRedo;
+    if (!this.undoBtn) return;
+    this.undoBtn.disabled = !this.activeInk.canUndo;
+    this.redoBtn.disabled = !this.activeInk.canRedo;
   }
 
   private onHide = (): void => {
     if (document.visibilityState === "hidden") {
       void this.deps.ink.flush();
       this.savePosition();
+      void this.nbPane?.flush();
     }
   };
 
@@ -332,6 +547,12 @@ export class ReaderView {
   start(): void {
     this.scroller.start();
     this.scroller.el.focus({ preventScroll: true });
+    const companion = this.deps.notebooks.companionId;
+    if (companion && !this.isNotebook) void this.openNotebook(companion);
+  }
+
+  get notebookPaneForTests(): NotebookPane | null {
+    return this.nbPane;
   }
 
   get scrollerForTests(): PageScroller {
@@ -417,6 +638,8 @@ export class ReaderView {
     clearTimeout(this.saveTimer);
     document.removeEventListener("visibilitychange", this.onHide);
     this.savePosition();
+    await this.closeNotebook(false);
+    this.unsubGrow?.();
     this.ink.destroy();
     await this.deps.ink.flush();
     this.thumbs.destroy();

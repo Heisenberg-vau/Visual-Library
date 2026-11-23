@@ -1,5 +1,8 @@
 import { InkModel } from "../core/annotations/InkModel";
 import { InkStore } from "../core/annotations/InkStore";
+import { NotebookDocument } from "../core/notebook/NotebookDocument";
+import type { PageLink } from "../core/annotations/types";
+import type { PagedDocument } from "../core/pdf/PagedDocument";
 import { looksLikePdf, openPdf } from "../core/pdf/PdfEngine";
 import { createFileStore } from "../core/storage/FileStore";
 import { LibraryService, type DocInspector } from "../core/storage/LibraryService";
@@ -10,7 +13,7 @@ import { UserFacingError } from "../core/types";
 import { toast } from "../ui/feedback";
 import { LibraryView, type ShelfView } from "../ui/library/LibraryView";
 import { DEFAULT_TOOLS, type ToolState } from "../ui/reader/InkLayer";
-import { ReaderView } from "../ui/reader/ReaderView";
+import { ReaderView, type NotebookHost } from "../ui/reader/ReaderView";
 
 /** Composition root: builds the layers and switches between screens. */
 
@@ -66,17 +69,72 @@ export class App {
     }
   }
 
+  private async openDoc(book: BookMeta): Promise<PagedDocument> {
+    if (book.kind === "notebook") {
+      return new NotebookDocument(book.fingerprint, book.pageCount, book.paper ?? "lines");
+    }
+    return openPdf(await this.library.readFile(book.id));
+  }
+
+  private async openInk(id: string): Promise<InkModel> {
+    const strokes = await this.inkStore.load(id);
+    return new InkModel(strokes, { savePage: (p, s) => this.inkStore.savePage(id, p, s) });
+  }
+
+  private async notebookHost(book: BookMeta): Promise<NotebookHost> {
+    const companionKey = `companion:${book.id}`;
+    const companionId = await this.meta.getSetting<string | null>(companionKey, null);
+    const splitRatio = await this.meta.getSetting<number>("splitRatio", 0.55);
+    const host: NotebookHost = {
+      list: async () => (await this.library.list()).filter((b) => b.kind === "notebook"),
+      create: (name, paper) => this.library.createNotebook(name, book.kind === "notebook" ? null : book.categoryId, paper),
+      open: async (id) => {
+        const meta = await this.library.get(id);
+        if (!meta || meta.kind !== "notebook") throw new Error("notebook missing");
+        await this.library.markOpened(id);
+        const doc = new NotebookDocument(meta.fingerprint, meta.pageCount, meta.paper ?? "lines");
+        return { meta, doc, ink: await this.openInk(id) };
+      },
+      setPageCount: (id, n) => void this.library.setPageCount(id, n),
+      savePosition: (id, page, zoom) => void this.library.savePosition(id, page, zoom),
+      companionId,
+      setCompanion: (id) => {
+        host.companionId = id;
+        void this.meta.setSetting(companionKey, id);
+      },
+      openLink: (link, notebookId) => void this.followLink(link, notebookId),
+      splitRatio,
+      saveSplitRatio: (r) => {
+        host.splitRatio = r;
+        void this.meta.setSetting("splitRatio", r);
+      },
+    };
+    return host;
+  }
+
+  /** A notebook link to another book: open that book at the page, notebook beside it. */
+  private async followLink(link: PageLink, notebookId: string | null): Promise<void> {
+    const target = await this.library.get(link.bookId);
+    if (!target) {
+      toast("Sách của liên kết này không còn trên kệ.", "error");
+      return;
+    }
+    await this.library.savePosition(target.id, link.page, target.zoom);
+    if (notebookId) await this.meta.setSetting(`companion:${target.id}`, notebookId);
+    await this.closeReader(false, false);
+    await this.open(target, false);
+    history.replaceState({ read: target.id }, "", `#read/${encodeURIComponent(target.id)}`);
+  }
+
   async open(book: BookMeta, push = true): Promise<void> {
     if (this.opening || this.reader) return;
     this.opening = true;
     document.body.classList.add("busy");
     try {
-      const file = await this.library.readFile(book.id);
-      const doc = await openPdf(file);
+      const doc = await this.openDoc(book);
       const fresh = (await this.library.get(book.id)) ?? book;
       await this.library.markOpened(book.id);
-      const strokes = await this.inkStore.load(book.id);
-      const ink = new InkModel(strokes, { savePage: (p, s) => this.inkStore.savePage(book.id, p, s) });
+      const ink = await this.openInk(book.id);
       const tools = { ...DEFAULT_TOOLS, ...(await this.meta.getSetting<Partial<ToolState>>("tools", {})) };
       this.reader = new ReaderView({
         book: fresh,
@@ -88,10 +146,11 @@ export class App {
         onToolsChange: (t) => void this.meta.setSetting("tools", t),
         onMargins: (m) => void this.library.setMargins(book.id, m),
         getFile: () => this.library.readFile(book.id),
+        notebooks: await this.notebookHost(fresh),
       });
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);
       this.libraryView.el.remove();
-      this.root.append(this.reader.el);
+      this.root.replaceChildren(this.reader.el);
       this.reader.start();
       (window as unknown as { __reader?: ReaderView }).__reader = this.reader;
     } catch (e) {
@@ -103,13 +162,14 @@ export class App {
     }
   }
 
-  private async closeReader(popHistory: boolean): Promise<void> {
+  private async closeReader(popHistory: boolean, showShelf = true): Promise<void> {
     const r = this.reader;
     if (!r) return;
     this.reader = null;
     (window as unknown as { __reader?: ReaderView }).__reader = undefined;
     if (popHistory) history.back();
     await r.destroy();
+    if (!showShelf) return;
     this.root.replaceChildren(this.libraryView.el);
     await this.libraryView.refresh();
   }

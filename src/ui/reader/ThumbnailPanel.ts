@@ -31,6 +31,12 @@ export class ThumbnailPanel {
     this.el.addEventListener("scroll", () => this.schedule(), { passive: true });
   }
 
+  /** The document grew (notebooks add pages). */
+  pagesChanged(): void {
+    this.inner.style.height = `${this.doc.numPages * ITEM_H}px`;
+    this.update();
+  }
+
   setActive(active: boolean): void {
     this.active = active;
     if (active) {

@@ -67,6 +67,13 @@ export class LibraryView {
       html: `${icon("upload", 20)}<span>Nhập tài liệu</span>`,
       onclick: () => this.fileInput.click(),
     });
+    const notebookBtn = h("button", {
+      class: "btn btn-notebook",
+      type: "button",
+      "data-testid": "new-notebook",
+      html: `${icon("notebook", 19)}<span>Tạo vở</span>`,
+      onclick: () => void this.newNotebook(),
+    });
     const selectBtn = h("button", {
       class: "btn btn-select",
       type: "button",
@@ -111,6 +118,7 @@ export class LibraryView {
         h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("book", 26) }), h("h1", {}, "Visual Library")),
         h("div", { class: "lib-search" }, h("span", { class: "search-ic", html: icon("search", 18) }), this.filterInput),
         selectBtn,
+        notebookBtn,
         importBtn,
         this.fileInput,
       ),
@@ -315,8 +323,10 @@ export class LibraryView {
   }
 
   private card(b: BookMeta): HTMLElement {
-    const cover = h("div", { class: "card-cover" });
-    void this.loadCover(b.id, cover);
+    const isNb = b.kind === "notebook";
+    const cover = h("div", { class: `card-cover ${isNb ? `nb-cover paper-${b.paper ?? "lines"}` : ""}` });
+    if (isNb) cover.append(h("span", { class: "nb-cover-label" }, b.title), h("span", { class: "nb-cover-tag", html: icon("notebook", 16) }));
+    else void this.loadCover(b.id, cover);
     const progress = b.pageCount > 1 ? Math.round(((b.lastPage - 1) / (b.pageCount - 1)) * 100) : 0;
     const more = h("button", { class: "icon-btn card-more", type: "button", "aria-label": "Tùy chọn", html: icon("more", 20) });
     more.addEventListener("click", (e) => {
@@ -343,7 +353,7 @@ export class LibraryView {
         { class: "card-body" },
         h("h3", { class: "card-title", title: b.title }, b.title),
         showPath ? h("div", { class: "card-path", title: path.map((c) => c.name).join(" › ") }, path.map((c) => c.name).join(" › ")) : null,
-        h("div", { class: "card-meta" }, `${b.pageCount} trang · ${formatBytes(b.size)}`),
+        h("div", { class: "card-meta" }, isNb ? `Vở · ${b.pageCount} trang` : `${b.pageCount} trang · ${formatBytes(b.size)}`),
         tags.length ? h("div", { class: "card-tags" }, ...tags) : null,
         h(
           "div",
@@ -449,6 +459,18 @@ export class LibraryView {
     if (added && hadNone) this.deps.onFirstImport();
     await this.refresh();
     return results;
+  }
+
+  private async newNotebook(): Promise<void> {
+    const name = await promptDialog("Tên vở mới", "", "Tạo vở");
+    if (name === null) return;
+    try {
+      const nb = await this.deps.library.createNotebook(name, this.currentShelfId());
+      await this.refresh();
+      this.deps.onOpen(nb);
+    } catch (e) {
+      toast(e instanceof UserFacingError ? e.message : "Không tạo được vở.", "error");
+    }
   }
 
   private async newShelf(parentId: string | null): Promise<void> {

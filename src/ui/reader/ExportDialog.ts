@@ -1,6 +1,6 @@
 import type { InkModel } from "../../core/annotations/InkModel";
-import type { Margins } from "../../core/annotations/types";
-import { buildExportJobs, exportFileName, inkExtent, runExportWorker, type ExportOptions } from "../../core/export/ExportService";
+import type { Margins, PaperPattern } from "../../core/annotations/types";
+import { buildExportJobs, buildNotebookJobs, exportFileName, inkExtent, runExportWorker, type ExportOptions } from "../../core/export/ExportService";
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import { formatBytes, h, icon } from "../dom";
 import { modal } from "../feedback";
@@ -11,6 +11,8 @@ export interface ExportDeps {
   margins: Margins;
   title: string;
   getFile: () => Promise<File>;
+  /** Set when exporting a notebook (no original file; pages get this paper). */
+  notebookPaper?: PaperPattern;
 }
 
 /** "Xuất bản có ghi chú": options -> progress -> save / share. */
@@ -21,7 +23,7 @@ export async function openExportDialog(d: ExportDeps): Promise<void> {
     const ext = inkExtent(d.ink.strokes(p));
     return !!ext && (ext.minX < 0 || ext.maxX > d.doc.pageSize(p).width);
   });
-  const bookHasMargin = d.margins.left > 0 || d.margins.right > 0;
+  const bookHasMargin = !d.notebookPaper && (d.margins.left > 0 || d.margins.right > 0);
   const fileName = exportFileName(d.title);
 
   await modal((close) => {
@@ -53,7 +55,9 @@ export async function openExportDialog(d: ExportDeps): Promise<void> {
       h(
         "p",
         {},
-        `Có ghi chú ở ${inked.length} trang. App tạo một file mới “${fileName}”. File gốc trên kệ không bị thay đổi.`,
+        d.notebookPaper
+          ? `Vở có ghi chép ở ${inked.length} trang. App tạo file PDF “${fileName}” để gửi hoặc in.`
+          : `Có ghi chú ở ${inked.length} trang. App tạo một file mới “${fileName}”. File gốc trên kệ không bị thay đổi.`,
       ),
       h(
         "fieldset",
@@ -62,7 +66,7 @@ export async function openExportDialog(d: ExportDeps): Promise<void> {
         radio("scope", "all", `Toàn bộ tài liệu (${d.doc.numPages} trang)`),
         radio("scope", "annotated", `Chỉ các trang có ghi chú (${inked.length} trang)`, "Gọn nhẹ để gửi cho người khác"),
       ),
-      bookHasMargin || hasMarginInk
+      bookHasMargin || (hasMarginInk && !d.notebookPaper)
         ? h(
             "fieldset",
             { class: "opt-group" },
@@ -85,15 +89,22 @@ export async function openExportDialog(d: ExportDeps): Promise<void> {
       const fill = h("span", { class: "fill" });
       body.replaceChildren(label, h("div", { class: "bar big" }, fill), h("p", { class: "muted small" }, "File lớn có thể mất một lúc. Bạn đừng đóng app."));
       try {
-        const { jobs, keepPages } = await buildExportJobs(d.doc, d.ink, d.margins, opts);
-        const file = await d.getFile();
+        let file: File | null = null;
+        let built;
+        if (d.notebookPaper) {
+          built = buildNotebookJobs(d.doc.numPages, d.doc.pageSize(0), d.notebookPaper, d.ink, opts.scope);
+        } else {
+          built = { ...(await buildExportJobs(d.doc, d.ink, d.margins, opts)), blank: undefined };
+          file = await d.getFile();
+        }
+        const { jobs, keepPages, blank } = built;
         const phases: Record<string, string> = { load: "Đang đọc file gốc…", draw: "Đang vẽ ghi chú vào trang…", save: "Đang ghi file mới…" };
         const bytes = await runExportWorker(file, jobs, keepPages, d.title, (f, phase) => {
           label.textContent = phases[phase] ?? "Đang xử lý…";
           const base = phase === "load" ? 0 : phase === "draw" ? 0.3 : 0.8;
           const span = phase === "load" ? 0.3 : phase === "draw" ? 0.5 : 0.2;
           fill.style.width = `${Math.round((base + f * span) * 100)}%`;
-        });
+        }, blank);
         const blob = new File([bytes as Uint8Array<ArrayBuffer>], fileName, { type: "application/pdf" });
         showDone(body, blob, close);
       } catch (e) {

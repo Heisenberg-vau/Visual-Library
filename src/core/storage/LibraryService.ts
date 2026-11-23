@@ -135,13 +135,53 @@ export class LibraryService {
     }
   }
 
+  // ---- notebooks ----------------------------------------------------
+
+  /** A new exercise book on `categoryId`, starting with two blank pages. */
+  async createNotebook(
+    name: string,
+    categoryId: string | null,
+    paper: NonNullable<BookMeta["paper"]> = "lines",
+  ): Promise<BookMeta> {
+    const title = name.replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!title) throw new UserFacingError("Tên vở không được để trống.");
+    const id = newId();
+    const nb: BookMeta = {
+      id,
+      kind: "notebook",
+      title,
+      fileName: "",
+      size: 0,
+      pageCount: 2,
+      fingerprint: `notebook:${id}`,
+      addedAt: Date.now(),
+      lastOpenedAt: null,
+      lastPage: 1,
+      zoom: 1,
+      categoryId,
+      tags: [],
+      margins: { left: 0, right: 0 },
+      paper,
+    };
+    await this.meta.put(nb);
+    return nb;
+  }
+
+  async setPageCount(id: string, pageCount: number): Promise<void> {
+    await this.meta.update(id, { pageCount });
+  }
+
+  async setPaper(id: string, paper: NonNullable<BookMeta["paper"]>): Promise<void> {
+    await this.meta.update(id, { paper });
+  }
+
   async rename(id: string, title: string): Promise<void> {
     const t = title.trim();
     if (t) await this.meta.update(id, { title: t });
   }
 
   async delete(id: string): Promise<void> {
-    await this.files.delete(id);
+    await this.files.delete(id).catch(() => {}); // notebooks have no file
     await this.meta.delete(id);
     await this.onDeleteHooks.reduce((p, fn) => p.then(() => fn(id)), Promise.resolve());
   }

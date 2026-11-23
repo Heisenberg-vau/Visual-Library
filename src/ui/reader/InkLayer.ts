@@ -1,7 +1,8 @@
 import { round1, simplify, snapHorizontal, straighten, strokeHitSegment } from "../../core/annotations/geometry";
 import type { InkModel } from "../../core/annotations/InkModel";
 import { HIGHLIGHT_OPACITY, strokeSvg, svgPathData } from "../../core/annotations/path";
-import type { InkTool, Stroke } from "../../core/annotations/types";
+import type { InkTool, PageLink, Stroke } from "../../core/annotations/types";
+import { linkAt, makeLinkStroke } from "../../core/notebook/links";
 import { highlightRects, snapUnderline, type CharBox } from "../../core/text/textGeometry";
 import { isStylus, type PageFrame, type PageScroller, type SlotHooks } from "./PageScroller";
 
@@ -53,6 +54,17 @@ interface Gesture {
   lastY: number;
 }
 
+/** Optional behaviour used by notebooks. */
+export interface InkLayerOptions {
+  /** Called when the pen starts writing here (to know which pane is active). */
+  onActivity?: () => void;
+  /** If it returns a link, the next pen tap places that page-link tag. */
+  linkToPlace?: () => PageLink | null;
+  onLinkPlaced?: () => void;
+  /** A finger tap, or a pen tap without moving, on a page-link tag. */
+  onLinkTap?: (link: PageLink) => void;
+}
+
 let idSeq = 0;
 const newStrokeId = () => `${Date.now().toString(36)}${(idSeq++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -69,6 +81,7 @@ export class InkLayer implements SlotHooks {
   private lastPenAt = 0;
   /** Strokes finishing (text snapping is async); keeps the live path visible. */
   private pending: Promise<void> = Promise.resolve();
+  private tap: { id: number; x: number; y: number; t: number } | null = null;
 
   constructor(
     private readonly scroller: PageScroller,
@@ -76,6 +89,7 @@ export class InkLayer implements SlotHooks {
     private readonly tools: () => ToolState,
     private readonly onHistory: () => void,
     private readonly textChars: (page: number) => Promise<CharBox[]>,
+    private readonly opts: InkLayerOptions = {},
   ) {
     const el = scroller.el;
     el.addEventListener("pointerdown", this.onDown);
@@ -208,14 +222,41 @@ export class InkLayer implements SlotHooks {
     return eraserButton || this.tools().tool !== "hand";
   }
 
-  private onDown = (e: PointerEvent): void => {
-    if (this.gesture || !this.writes(e)) return;
+  private slotPage(e: PointerEvent): number | null {
     const slotEl = (e.target as Element | null)?.closest?.(".page-slot") as HTMLElement | null;
-    if (!slotEl) return;
-    const page = Number(slotEl.dataset.page) - 1;
+    return slotEl ? Number(slotEl.dataset.page) - 1 : null;
+  }
+
+  /** Link tags react to taps (fingers, or the pen in "hand" mode). */
+  private tapLink(page: number, clientX: number, clientY: number): boolean {
+    if (!this.opts.onLinkTap) return false;
+    const pt = this.toPage(page, clientX, clientY);
+    const hit = pt ? linkAt(this.model.strokes(page), pt.x, pt.y, 3) : null;
+    if (hit?.link) {
+      this.opts.onLinkTap(hit.link);
+      return true;
+    }
+    return false;
+  }
+
+  private onDown = (e: PointerEvent): void => {
+    if (!this.writes(e)) {
+      if (e.isPrimary) this.tap = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+      return;
+    }
+    if (this.gesture) return;
+    const page = this.slotPage(e);
+    if (page === null) return;
     const pt = this.toPage(page, e.clientX, e.clientY);
     if (!pt) return;
     e.preventDefault();
+    this.opts.onActivity?.();
+    const pendingLink = this.opts.linkToPlace?.();
+    if (pendingLink) {
+      this.model.add(page, makeLinkStroke(newStrokeId(), pt.x, pt.y, pendingLink));
+      this.opts.onLinkPlaced?.();
+      return;
+    }
     this.scroller.el.setPointerCapture?.(e.pointerId);
     if (e.pointerType === "pen") this.lastPenAt = performance.now();
     const t = this.tools();
@@ -270,9 +311,29 @@ export class InkLayer implements SlotHooks {
   }
 
   private onUp = (e: PointerEvent): void => {
+    const tap = this.tap;
+    if (tap && tap.id === e.pointerId) {
+      this.tap = null;
+      const page = this.slotPage(e);
+      if (page !== null && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 10 && performance.now() - tap.t < 600) {
+        this.tapLink(page, e.clientX, e.clientY);
+      }
+      return;
+    }
     const g = this.gesture;
     if (!g || e.pointerId !== g.pointerId) return;
     this.gesture = null;
+    // A pen tap (no movement) on a link tag follows the link instead of leaving a dot.
+    if (g.mode === "draw" && this.opts.onLinkTap) {
+      const p = g.points;
+      let moved = 0;
+      for (let i = 2; i < p.length; i += 2) moved = Math.max(moved, Math.hypot(p[i] - p[0], p[i + 1] - p[1]));
+      if (moved < 2 && linkAt(this.model.strokes(g.page), p[0], p[1], 3)) {
+        this.clearLive(g.page);
+        this.tapLink(g.page, e.clientX, e.clientY);
+        return;
+      }
+    }
     if (g.mode === "erase") {
       if (g.erased.size) this.model.remove(g.page, g.erased);
       else this.redraw(g.page);

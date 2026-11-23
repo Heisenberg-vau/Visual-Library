@@ -2,10 +2,10 @@
 import { ExportError, exportAnnotatedPdf, type ExportRequest } from "./exportPdf";
 
 /** Builds the annotated PDF off the main thread so the app stays responsive. */
-self.onmessage = async (e: MessageEvent<{ file: Blob } & Omit<ExportRequest, "bytes">>) => {
+self.onmessage = async (e: MessageEvent<{ file: Blob | null } & Omit<ExportRequest, "bytes">>) => {
   try {
     const { file, ...rest } = e.data;
-    const bytes = await file.arrayBuffer();
+    const bytes = file ? await file.arrayBuffer() : null;
     const out = await exportAnnotatedPdf({ ...rest, bytes }, (fraction, phase) =>
       self.postMessage({ type: "progress", fraction, phase }),
     );

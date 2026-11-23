@@ -5,9 +5,19 @@
  */
 export type InkTool = "pen" | "highlighter" | "underline";
 
+/** A tappable tag in a notebook that jumps to a page of a book. */
+export interface PageLink {
+  bookId: string;
+  /** 1-based page in that book. */
+  page: number;
+  /** Text shown on the tag, e.g. "Rolls-Royce · tr. 245". */
+  label: string;
+}
+
 export interface Stroke {
   id: string;
-  tool: InkTool;
+  /** "link": a page-link tag (drawn as a chip; `rects` holds its box). */
+  tool: InkTool | "link";
   /** CSS colour, e.g. "#1d2430". */
   color: string;
   /** Line width in PDF points. */
@@ -19,6 +29,7 @@ export interface Stroke {
    * characters. When present they are drawn instead of `points`.
    */
   rects?: number[];
+  link?: PageLink;
 }
 
 export interface PageInk {

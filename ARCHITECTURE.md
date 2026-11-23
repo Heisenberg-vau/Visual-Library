@@ -45,6 +45,13 @@ src/
   runs pdf-lib to draw the same path commands the screen uses (`path.ts`) into
   a NEW file. The original's content is wrapped in q…Q, highlights use an
   ExtGState with Multiply blend, widened pages get larger Media/CropBoxes.
+- **Notebooks** (`core/notebook`): a notebook is a `BookMeta` of kind
+  `notebook` (so shelves, tags, search and select work unchanged) and a
+  `NotebookDocument` that implements `PagedDocument` with ruled/grid/dot paper.
+  Ink reuses `InkModel`/`InkStore`. Page-link tags are strokes of tool `link`
+  (so undo, eraser, saving and export come for free). The reader shows a
+  notebook beside a book in a resizable split (`NotebookPane`); undo/redo
+  follow the pane last written in; the last notebook per book reopens.
 - **Input rules:** pen (and mouse, for laptops) writes; fingers only scroll and
   pinch. Stylus touches are `preventDefault`-ed so the page never scrolls under
   the pen, and touches are ignored for 250 ms after pen activity (palm).
