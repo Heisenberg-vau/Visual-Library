@@ -116,6 +116,7 @@ export class LibraryService {
         zoom: 1,
         categoryId,
         tags: [],
+        margins: { left: 0, right: 0 },
       };
       await this.meta.put(book);
       if (info.cover) await this.meta.putCover(id, info.cover);
@@ -142,6 +143,17 @@ export class LibraryService {
   async delete(id: string): Promise<void> {
     await this.files.delete(id);
     await this.meta.delete(id);
+    await this.onDeleteHooks.reduce((p, fn) => p.then(() => fn(id)), Promise.resolve());
+  }
+
+  /** Lets other modules (handwriting) clean up when a book is deleted. */
+  private onDeleteHooks: ((id: string) => Promise<void>)[] = [];
+  onDelete(fn: (id: string) => Promise<void>): void {
+    this.onDeleteHooks.push(fn);
+  }
+
+  async setMargins(id: string, margins: { left: number; right: number }): Promise<void> {
+    await this.meta.update(id, { margins });
   }
 
   // ---- shelves -----------------------------------------------------

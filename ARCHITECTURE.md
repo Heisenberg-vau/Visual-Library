@@ -30,9 +30,15 @@ src/
   first and cancels work for pages that scrolled away.
 - **`PagedDocument` abstraction.** The reader, pen tools and export work on this
   interface. `.docx` (milestone 6) will be converted to the same shape.
-- **Annotations (milestone 2)** will live in a new IndexedDB store keyed by
-  book + page, in page-relative coordinates (0..1) so they survive zoom and
-  re-layout, drawn on a separate canvas layer above each page.
+- **Handwriting** (`core/annotations`): strokes stored per (book, page) in the
+  IndexedDB `ink` store, in PDF points relative to the original page, so they
+  survive zoom and re-layout and export 1:1. Ink in a widened margin has x < 0
+  or x > page width. `InkModel` holds undo/redo and debounced saving;
+  `ui/reader/InkLayer` draws it on three canvases per visible page
+  (highlighter blended *multiply*, pen, live stroke).
+- **Input rules:** pen (and mouse, for laptops) writes; fingers only scroll and
+  pinch. Stylus touches are `preventDefault`-ed so the page never scrolls under
+  the pen, and touches are ignored for 250 ms after pen activity (palm).
 - **Duplicate detection** uses SHA-256 of size + first/last MB, not the pdf.js
   fingerprint (which collides for PDFs without a trailer /ID).
 - **Schema changes** to IndexedDB only add stores/indexes in `idb.ts`
@@ -43,4 +49,5 @@ src/
 - `tests/unit` (Vitest): layout maths, scheduler, cache, library use-cases.
 - `tests/e2e` (Playwright + real Chrome, tablet viewport with touch): import,
   duplicates, 650-page navigation, outline, thumbnails, pinch zoom, position
-  memory, reload, offline, 200 MB file (`HEAVY=1`), delete.
+  memory, reload, offline, 200 MB file (`HEAVY=1`), delete, shelves/tags,
+  v0.1 data upgrade, and handwriting with a simulated stylus (CDP pen events).

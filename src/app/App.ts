@@ -1,3 +1,5 @@
+import { InkModel } from "../core/annotations/InkModel";
+import { InkStore } from "../core/annotations/InkStore";
 import { looksLikePdf, openPdf } from "../core/pdf/PdfEngine";
 import { createFileStore } from "../core/storage/FileStore";
 import { LibraryService, type DocInspector } from "../core/storage/LibraryService";
@@ -7,6 +9,7 @@ import type { BookMeta } from "../core/types";
 import { UserFacingError } from "../core/types";
 import { toast } from "../ui/feedback";
 import { LibraryView, type ShelfView } from "../ui/library/LibraryView";
+import { DEFAULT_TOOLS, type ToolState } from "../ui/reader/InkLayer";
 import { ReaderView } from "../ui/reader/ReaderView";
 
 /** Composition root: builds the layers and switches between screens. */
@@ -30,10 +33,14 @@ export class App {
   private libraryView: LibraryView;
   private reader: ReaderView | null = null;
   private opening = false;
+  private inkStore = new InkStore();
+  private meta: MetaStore;
 
   constructor(private readonly root: HTMLElement) {
     const meta = new MetaStore();
+    this.meta = meta;
     this.library = new LibraryService(meta, createFileStore(), pdfInspector);
+    this.library.onDelete((id) => this.inkStore.deleteBook(id));
     this.libraryView = new LibraryView({
       library: this.library,
       onOpen: (b) => void this.open(b),
@@ -68,11 +75,18 @@ export class App {
       const doc = await openPdf(file);
       const fresh = (await this.library.get(book.id)) ?? book;
       await this.library.markOpened(book.id);
+      const strokes = await this.inkStore.load(book.id);
+      const ink = new InkModel(strokes, { savePage: (p, s) => this.inkStore.savePage(book.id, p, s) });
+      const tools = { ...DEFAULT_TOOLS, ...(await this.meta.getSetting<Partial<ToolState>>("tools", {})) };
       this.reader = new ReaderView({
         book: fresh,
         doc,
+        ink,
+        tools,
         onClose: () => history.back(),
         onPosition: (page, zoom) => void this.library.savePosition(book.id, page, zoom),
+        onToolsChange: (t) => void this.meta.setSetting("tools", t),
+        onMargins: (m) => void this.library.setMargins(book.id, m),
       });
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);
       this.libraryView.el.remove();

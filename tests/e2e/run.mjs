@@ -213,6 +213,154 @@ test("reload while reading reopens the book; back returns to shelf", async () =>
   await page.waitForSelector('[data-testid="shelf"]');
 });
 
+// ---- milestone 3: handwriting (stylus simulated through DevTools) ----
+
+let cdpSession;
+async function cdp() {
+  cdpSession ??= await context.newCDPSession(page);
+  return cdpSession;
+}
+/** Draws with a simulated pen. pts are [x, y] fractions of the page slot box. */
+async function penStroke(pageNo, pts, opts = {}) {
+  const c = await cdp();
+  const box = await page.locator(`.page-slot[data-page="${pageNo}"]`).boundingBox();
+  const at = ([fx, fy]) => ({ x: box.x + fx * box.width, y: box.y + fy * box.height });
+  const pointerType = opts.pointerType ?? "pen";
+  const steps = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    for (let k = 0; k < 8; k++) {
+      const t = k / 8;
+      steps.push([pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t]);
+    }
+  }
+  steps.push(pts[pts.length - 1]);
+  const first = at(steps[0]);
+  await c.send("Input.dispatchMouseEvent", { type: "mousePressed", ...first, button: "left", buttons: 1, clickCount: 1, pointerType });
+  for (const p of steps.slice(1)) {
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at(p), button: "left", buttons: 1, pointerType });
+  }
+  await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...at(steps[steps.length - 1]), button: "left", buttons: 0, clickCount: 1, pointerType });
+}
+const strokesOn = (pageNo) => page.evaluate((n) => window.__reader.inkForTests.strokes(n - 1).map((s) => ({ tool: s.tool, n: s.points.length, points: s.points })), pageNo);
+/** Non-transparent pixels on a page's ink canvases. */
+const inkPixels = (pageNo) => page.evaluate((n) => {
+  let count = 0;
+  for (const c of document.querySelectorAll(`.page-slot[data-page="${n}"] .ink-canvas`)) {
+    if (!c.width) continue;
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < d.length; i += 16) if (d[i] > 0) count++;
+  }
+  return count;
+}, pageNo);
+async function gotoPage(n) {
+  await page.click('[data-testid="page-input"]');
+  await page.keyboard.type(String(n));
+  await page.keyboard.press("Enter");
+  await waitRendered(n);
+}
+async function tool(name) {
+  await page.click(`[data-testid="tools"] [data-tool="${name}"]`);
+}
+
+test("milestone 3: pen writes on the page, finger still scrolls", async () => {
+  await openBook("650");
+  await gotoPage(10);
+  await tool("pen");
+  await penStroke(10, [[0.2, 0.3], [0.4, 0.35], [0.6, 0.3], [0.7, 0.4]]);
+  const s = await strokesOn(10);
+  assert.equal(s.length, 1);
+  assert.equal(s[0].tool, "pen");
+  assert.ok(s[0].n >= 6, "freehand keeps its shape");
+  assert.ok((await inkPixels(10)) > 50, "ink is visible");
+
+  // A single finger drag scrolls and does not draw.
+  const c = await cdp();
+  const box = await page.locator('[data-testid="scroller"]').boundingBox();
+  const before = await page.evaluate(() => document.querySelector('[data-testid="scroller"]').scrollTop);
+  const x = box.x + box.width / 2;
+  await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: box.y + 600 }] });
+  for (let y = 590; y >= 300; y -= 10) await c.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: box.y + y }] });
+  await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+  const after = await page.evaluate(() => document.querySelector('[data-testid="scroller"]').scrollTop);
+  assert.ok(after > before + 100, `finger scrolled (${before} -> ${after})`);
+  assert.equal((await strokesOn(10)).length, 1);
+  await gotoPage(10);
+});
+
+test("milestone 3: hand tool lets the pen scroll instead of writing", async () => {
+  await tool("hand");
+  await penStroke(10, [[0.5, 0.5], [0.55, 0.6]]);
+  assert.equal((await strokesOn(10)).length, 1);
+  await tool("pen");
+  await gotoPage(10); // the pen may have scrolled the page, as intended
+});
+
+test("milestone 3: highlighter straightens, underline is a straight line", async () => {
+  await tool("highlighter");
+  await penStroke(10, [[0.5, 0.15], [0.65, 0.151], [0.8, 0.149]]);
+  await tool("underline");
+  await penStroke(10, [[0.5, 0.2], [0.65, 0.203], [0.8, 0.201]]);
+  const s = await strokesOn(10);
+  const hl = s.find((x) => x.tool === "highlighter");
+  const ul = s.find((x) => x.tool === "underline");
+  assert.equal(hl.n, 4, "highlight became one straight segment");
+  assert.equal(ul.n, 4);
+  assert.equal(ul.points[1], ul.points[3], "underline snapped horizontal");
+  await shot("09-ink");
+});
+
+test("milestone 3: eraser removes strokes; undo and redo", async () => {
+  await tool("eraser");
+  await penStroke(10, [[0.3, 0.1], [0.3, 0.38]]); // crosses the pen stroke only
+  let s = await strokesOn(10);
+  assert.deepEqual(s.map((x) => x.tool).sort(), ["highlighter", "underline"]);
+  await page.click('[data-testid="undo"]');
+  s = await strokesOn(10);
+  assert.equal(s.length, 3);
+  assert.equal(s[0].tool, "pen", "erased stroke comes back in its original order");
+  await page.click('[data-testid="redo"]');
+  assert.equal((await strokesOn(10)).length, 2);
+  await page.click('[data-testid="undo"]');
+  assert.equal((await strokesOn(10)).length, 3);
+  await tool("pen");
+});
+
+test("milestone 3: ink stays sharp after zoom and survives reopening", async () => {
+  await page.click('button[aria-label="Phóng to"]');
+  await waitRendered(10);
+  assert.ok((await inkPixels(10)) > 50);
+  await page.click('[data-testid="zoom-label"]');
+  await page.waitForTimeout(1000);
+  await backToShelf();
+  await openBook("650");
+  await waitRendered(10);
+  assert.equal((await strokesOn(10)).length, 3);
+  assert.ok((await inkPixels(10)) > 50);
+});
+
+test("milestone 3: widened margin gives space to write beside the page", async () => {
+  const before = await page.locator('.page-slot[data-page="10"]').boundingBox();
+  await page.click('[data-testid="margin-btn"]');
+  await page.locator(".menu-item", { hasText: "Lề phải rộng 30%" }).click();
+  await gotoPage(10);
+  const after = await page.locator('.page-slot[data-page="10"]').boundingBox();
+  assert.ok(after.width / after.height > (before.width / before.height) * 1.25, "slot is wider than the page");
+  await penStroke(10, [[0.85, 0.3], [0.9, 0.35], [0.95, 0.3]]);
+  const s = await strokesOn(10);
+  const margin = s[s.length - 1];
+  assert.ok(margin.points[0] > 595, `stroke sits right of the page edge (x=${margin.points[0]})`);
+  await shot("10-margin");
+  await backToShelf();
+  await openBook("650");
+  await waitRendered(10);
+  const again = await page.locator('.page-slot[data-page="10"]').boundingBox();
+  assert.ok(again.width / again.height > 0.9, "margin setting remembered");
+  await page.click('[data-testid="margin-btn"]');
+  await page.locator(".menu-item", { hasText: "Không nới lề" }).click();
+  await backToShelf();
+});
+
 test("works offline after the first visit", async () => {
   await page.waitForFunction(async () => (await navigator.serviceWorker?.getRegistration())?.active, null, { timeout: 20000 });
   await page.reload(); // let the service worker control the page
@@ -220,7 +368,8 @@ test("works offline after the first visit", async () => {
   await page.reload();
   await page.waitForSelector('[data-testid="book-card"]');
   await openBook("650");
-  await waitRendered(123);
+  await waitRendered(await currentPage());
+  assert.ok((await inkOf(await currentPage())) > 0.005, "page renders offline");
   await backToShelf();
   await context.setOffline(false);
 });

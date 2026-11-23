@@ -1,3 +1,4 @@
+import type { Margins } from "../../core/annotations/types";
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import { PageLayout, clamp, type PageAnchor } from "../../core/util/layout";
 import type { JobScheduler } from "../../core/util/scheduler";
@@ -10,16 +11,45 @@ const GAP = 14;
 interface Slot {
   index: number;
   el: HTMLElement;
+  /** The original page area inside the slot (excludes margins). */
+  paper: HTMLElement;
   canvas: HTMLCanvasElement | null;
   /** layout.scale the current canvas was rendered at (0 = none). */
   renderedScale: number;
 }
 
+/** Where the original page sits inside its slot (slot = page + margins). */
+export interface PageFrame {
+  /** CSS px per PDF point. */
+  scale: number;
+  /** CSS px from the slot's left edge to the page's left edge. */
+  offsetX: number;
+  /** Slot size in CSS px. */
+  width: number;
+  height: number;
+}
+
+/** Lets another layer (handwriting) decorate visible page slots. */
+export interface SlotHooks {
+  attach(index: number, el: HTMLElement, frame: PageFrame): void;
+  resize(index: number, frame: PageFrame): void;
+  detach(index: number): void;
+}
+
 export interface PageScrollerOptions {
   initialPage: number; // 1-based
   initialZoom: number;
+  margins?: Margins;
   onPageChange: (page: number) => void;
   onZoomChange: (zoom: number) => void;
+}
+
+/** Stylus contacts must never scroll or pinch (they write). */
+export function isStylus(t: Touch): boolean {
+  return (t as Touch & { touchType?: string }).touchType === "stylus";
+}
+function fingers(list: TouchList): Touch[] {
+  return [...list].filter((t) => !isStylus(t));
 }
 
 /**
@@ -46,6 +76,8 @@ export class PageScroller {
     anchor: PageAnchor;
   } | null = null;
   private destroyed = false;
+  private margins: Margins;
+  hooks: SlotHooks | null = null;
 
   constructor(
     private readonly doc: PagedDocument,
@@ -53,6 +85,7 @@ export class PageScroller {
     private readonly opts: PageScrollerOptions,
   ) {
     this.zoom = clamp(opts.initialZoom || 1, MIN_ZOOM, MAX_ZOOM);
+    this.margins = opts.margins ?? { left: 0, right: 0 };
     this.content = h("div", { class: "pages-content" });
     this.el = h("div", { class: "pages-scroller", "data-testid": "scroller", tabindex: 0 }, this.content);
     this.el.addEventListener("scroll", () => this.schedule(), { passive: true });
@@ -88,8 +121,38 @@ export class PageScroller {
     return [...this.slots.values()].filter((s) => s.renderedScale > 0).map((s) => s.index + 1);
   }
 
+  get currentMargins(): Margins {
+    return this.margins;
+  }
+
+  /** Widens every page with writing space; keeps the reading position. */
+  setMargins(m: Margins): void {
+    this.margins = { left: Math.max(0, m.left), right: Math.max(0, m.right) };
+    this.relayout();
+  }
+
+  /** Geometry of page i inside its slot. */
+  frame(i: number): PageFrame {
+    const w = this.doc.pageSize(i).width;
+    return {
+      scale: this.layout.scale,
+      offsetX: this.margins.left * w * this.layout.scale,
+      width: this.layout.widths[i],
+      height: this.layout.heights[i],
+    };
+  }
+
+  /** Slot element of page i if it is currently in the DOM. */
+  slotElement(i: number): HTMLElement | null {
+    return this.slots.get(i)?.el ?? null;
+  }
+
   private buildLayout(): void {
-    const sizes = Array.from({ length: this.doc.numPages }, (_, i) => this.doc.pageSize(i));
+    const k = 1 + this.margins.left + this.margins.right;
+    const sizes = Array.from({ length: this.doc.numPages }, (_, i) => {
+      const s = this.doc.pageSize(i);
+      return { width: s.width * k, height: s.height };
+    });
     this.layout = new PageLayout(
       sizes,
       { gap: GAP, availableWidth: this.el.clientWidth - 2 * GAP, zoom: this.zoom },
@@ -181,14 +244,12 @@ export class PageScroller {
   }
 
   private createSlot(index: number): Slot {
-    const el = h(
-      "div",
-      { class: "page-slot", "data-page": index + 1 },
-      h("div", { class: "page-placeholder" }, String(index + 1)),
-    );
-    const s: Slot = { index, el, canvas: null, renderedScale: 0 };
+    const paper = h("div", { class: "page-paper" }, h("div", { class: "page-placeholder" }, String(index + 1)));
+    const el = h("div", { class: "page-slot", "data-page": index + 1 }, paper);
+    const s: Slot = { index, el, paper, canvas: null, renderedScale: 0 };
     this.positionSlot(s);
     this.content.append(el);
+    this.hooks?.attach(index, el, this.frame(index));
     return s;
   }
 
@@ -200,6 +261,13 @@ export class PageScroller {
     st.left = `${this.layout.left(i)}px`;
     st.width = `${this.layout.widths[i]}px`;
     st.height = `${this.layout.heights[i]}px`;
+    const f = this.frame(i);
+    s.el.classList.toggle("has-margin", f.width - 0.5 > this.doc.pageSize(i).width * f.scale);
+    const ps = s.paper.style;
+    ps.left = `${f.offsetX}px`;
+    ps.width = `${this.doc.pageSize(i).width * f.scale}px`;
+    ps.height = `${f.height}px`;
+    if (s.el.isConnected) this.hooks?.resize(i, f);
   }
 
   private dropSlot(s: Slot): void {
@@ -211,6 +279,7 @@ export class PageScroller {
     }
     s.el.remove();
     this.slots.delete(s.index);
+    this.hooks?.detach(s.index);
   }
 
   private jobKey(i: number): string {
@@ -235,7 +304,7 @@ export class PageScroller {
           s.canvas.width = 0;
           s.canvas.replaceWith(canvas);
         } else {
-          s.el.replaceChildren(canvas);
+          s.paper.replaceChildren(canvas);
         }
         s.canvas = canvas;
         s.renderedScale = scale;
@@ -253,9 +322,10 @@ export class PageScroller {
   }
 
   private onTouchStart = (e: TouchEvent): void => {
-    if (e.touches.length !== 2) return;
-    const p1 = this.viewportPoint(e.touches[0]);
-    const p2 = this.viewportPoint(e.touches[1]);
+    const f = fingers(e.touches);
+    if (f.length !== 2 || this.pinch) return;
+    const p1 = this.viewportPoint(f[0]);
+    const p2 = this.viewportPoint(f[1]);
     const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
     const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y) || 1;
     this.pinch = { startDist: dist, startMid: mid, mid, ratio: 1, anchor: this.anchorAtViewport(mid.x, mid.y) };
@@ -266,10 +336,11 @@ export class PageScroller {
   };
 
   private onTouchMove = (e: TouchEvent): void => {
-    if (!this.pinch || e.touches.length !== 2) return;
+    const f = fingers(e.touches);
+    if (!this.pinch || f.length !== 2) return;
     if (e.cancelable) e.preventDefault();
-    const p1 = this.viewportPoint(e.touches[0]);
-    const p2 = this.viewportPoint(e.touches[1]);
+    const p1 = this.viewportPoint(f[0]);
+    const p2 = this.viewportPoint(f[1]);
     const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
     const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y) || 1;
     let ratio = dist / this.pinch.startDist;
@@ -282,7 +353,7 @@ export class PageScroller {
   };
 
   private onTouchEnd = (e: TouchEvent): void => {
-    if (!this.pinch || e.touches.length >= 2) return;
+    if (!this.pinch || fingers(e.touches).length >= 2) return;
     const { ratio, anchor, mid } = this.pinch;
     this.pinch = null;
     this.content.style.transform = "";

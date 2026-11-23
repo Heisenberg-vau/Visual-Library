@@ -3,7 +3,12 @@ import { STORES, tx, txMulti } from "./idb";
 
 /** Fills fields added after v0.1.0 so old records keep working. */
 function normalize(b: BookMeta): BookMeta {
-  return { ...b, categoryId: b.categoryId ?? null, tags: Array.isArray(b.tags) ? b.tags : [] };
+  return {
+    ...b,
+    categoryId: b.categoryId ?? null,
+    tags: Array.isArray(b.tags) ? b.tags : [],
+    margins: b.margins ?? { left: 0, right: 0 },
+  };
 }
 
 /** Book metadata, covers, shelves and settings in IndexedDB. */

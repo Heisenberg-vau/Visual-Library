@@ -1,7 +1,11 @@
+import type { InkModel } from "../../core/annotations/InkModel";
+import type { Margins } from "../../core/annotations/types";
 import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
 import { h, iconButton } from "../dom";
+import { popupMenu, toast } from "../feedback";
+import { InkLayer, type Tool, type ToolState } from "./InkLayer";
 import { OutlinePanel } from "./OutlinePanel";
 import { PageScroller } from "./PageScroller";
 import { ThumbnailPanel } from "./ThumbnailPanel";
@@ -9,9 +13,24 @@ import { ThumbnailPanel } from "./ThumbnailPanel";
 export interface ReaderDeps {
   book: BookMeta;
   doc: PagedDocument;
+  ink: InkModel;
+  tools: ToolState;
   onClose: () => void;
   onPosition: (page: number, zoom: number) => void;
+  onToolsChange: (t: ToolState) => void;
+  onMargins: (m: Margins) => void;
 }
+
+const PEN_COLORS = ["#1d2430", "#1f5fbf", "#d03a2f", "#1e8a4c", "#7b3fb5", "#e07a12"];
+const HL_COLORS = ["#ffd400", "#7ee36a", "#ff8fc7", "#6cc7ff", "#ffa94d"];
+const UL_COLORS = ["#d03a2f", "#1f5fbf", "#1d2430", "#1e8a4c"];
+const PEN_WIDTHS = [1, 1.6, 2.6];
+const MARGIN_PRESETS: { label: string; m: Margins }[] = [
+  { label: "Không nới lề", m: { left: 0, right: 0 } },
+  { label: "Lề phải rộng 30%", m: { left: 0, right: 0.3 } },
+  { label: "Lề phải rộng 60%", m: { left: 0, right: 0.6 } },
+  { label: "Hai bên, mỗi bên 25%", m: { left: 0.25, right: 0.25 } },
+];
 
 type PanelTab = "thumbs" | "outline";
 
@@ -29,12 +48,20 @@ export class ReaderView {
   private panelOpen = false;
   private tab: PanelTab = "thumbs";
   private saveTimer = 0;
+  private ink: InkLayer;
+  private tools: ToolState;
+  private toolButtons = new Map<Tool, HTMLButtonElement>();
+  private colorBtn: HTMLButtonElement;
+  private undoBtn: HTMLButtonElement;
+  private redoBtn: HTMLButtonElement;
 
   constructor(private readonly deps: ReaderDeps) {
     const { book, doc } = deps;
+    this.tools = { ...deps.tools };
     this.scroller = new PageScroller(doc, this.scheduler, {
       initialPage: book.lastPage,
       initialZoom: book.zoom,
+      margins: book.margins,
       onPageChange: (p) => this.onPageChange(p),
       onZoomChange: () => {
         this.updateZoomLabel();
@@ -88,12 +115,44 @@ export class ReaderView {
       h("div", { class: "sidebar-body" }, this.thumbs.el, this.outline.el),
     );
 
+    this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory());
+    const toolGroup = h("div", { class: "tool-group", "data-testid": "tools" });
+    const toolDefs: [Tool, string, string][] = [
+      ["hand", "hand", "Chỉ đọc (bút cũng cuộn trang)"],
+      ["pen", "pen", "Bút"],
+      ["highlighter", "highlighter", "Bút dạ quang"],
+      ["underline", "underline", "Gạch chân (nét thẳng)"],
+      ["eraser", "eraser", "Tẩy (xóa cả nét)"],
+    ];
+    for (const [t, ic, label] of toolDefs) {
+      const b = iconButton(ic, label, () => this.setTool(t), "tool-btn");
+      b.dataset.tool = t;
+      this.toolButtons.set(t, b);
+      toolGroup.append(b);
+    }
+    this.colorBtn = h("button", {
+      class: "color-btn",
+      type: "button",
+      title: "Màu và độ dày",
+      "aria-label": "Màu và độ dày",
+      "data-testid": "color-btn",
+    });
+    this.colorBtn.addEventListener("click", () => this.openPalette());
+    this.undoBtn = iconButton("undo", "Hoàn tác (Ctrl+Z)", () => this.undo());
+    this.redoBtn = iconButton("redo", "Làm lại (Ctrl+Y)", () => this.redo());
+    this.undoBtn.dataset.testid = "undo";
+    this.redoBtn.dataset.testid = "redo";
+    const marginBtn = iconButton("margin", "Nới rộng lề để ghi chú", () => this.openMargins(marginBtn));
+    marginBtn.dataset.testid = "margin-btn";
+    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, marginBtn);
+
     const toolbar = h(
       "header",
       { class: "reader-toolbar" },
       iconButton("back", "Về kệ sách", () => deps.onClose(), "tb-back"),
       iconButton("panel", "Trang và mục lục", () => this.togglePanel(), "tb-panel"),
       h("div", { class: "reader-title", title: book.title }, book.title),
+      toolGroup,
       h(
         "div",
         { class: "page-nav" },
@@ -118,7 +177,131 @@ export class ReaderView {
     this.el.addEventListener("keydown", this.onKey);
     this.showTab("thumbs");
     this.updateZoomLabel();
+    this.renderTools();
+    this.updateHistory();
+    document.addEventListener("visibilitychange", this.onHide);
   }
+
+  // ---- ink tools ------------------------------------------------------
+
+  private setTool(t: Tool): void {
+    this.tools = { ...this.tools, tool: t };
+    this.renderTools();
+    this.deps.onToolsChange(this.tools);
+  }
+
+  private currentColor(): string | null {
+    const t = this.tools.tool;
+    return t === "pen" ? this.tools.penColor : t === "highlighter" ? this.tools.hlColor : t === "underline" ? this.tools.ulColor : null;
+  }
+
+  private renderTools(): void {
+    for (const [t, b] of this.toolButtons) {
+      b.classList.toggle("active", t === this.tools.tool);
+      b.setAttribute("aria-pressed", String(t === this.tools.tool));
+    }
+    const c = this.currentColor();
+    this.colorBtn.hidden = c === null;
+    this.colorBtn.innerHTML = c ? `<span class="color-dot" style="background:${c}"></span>` : "";
+  }
+
+  private openPalette(): void {
+    const t = this.tools.tool;
+    if (t !== "pen" && t !== "highlighter" && t !== "underline") return;
+    const colors = t === "pen" ? PEN_COLORS : t === "highlighter" ? HL_COLORS : UL_COLORS;
+    const key = t === "pen" ? "penColor" : t === "highlighter" ? "hlColor" : "ulColor";
+    const backdrop = h("div", { class: "menu-backdrop" });
+    const close = () => backdrop.remove();
+    const pal = h("div", { class: "palette", "data-testid": "palette" }, h("h4", {}, "Màu"));
+    const sw = h("div", { class: "swatches" });
+    for (const col of colors) {
+      const b = h("button", {
+        class: `sw ${this.tools[key] === col ? "active" : ""}`,
+        type: "button",
+        "aria-label": col,
+        style: `background:${col}`,
+      });
+      b.addEventListener("click", () => {
+        this.tools = { ...this.tools, [key]: col };
+        this.renderTools();
+        this.deps.onToolsChange(this.tools);
+        close();
+      });
+      sw.append(b);
+    }
+    pal.append(sw);
+    if (t === "pen") {
+      pal.append(h("h4", {}, "Độ dày nét"));
+      const ws = h("div", { class: "widths" });
+      for (const w of PEN_WIDTHS) {
+        const b = h(
+          "button",
+          { class: `wbtn ${this.tools.penWidth === w ? "active" : ""}`, type: "button", "aria-label": `Độ dày ${w}` },
+          h("span", { style: `height:${Math.round(w * 2)}px` }),
+        );
+        b.addEventListener("click", () => {
+          this.tools = { ...this.tools, penWidth: w };
+          this.deps.onToolsChange(this.tools);
+          close();
+        });
+        ws.append(b);
+      }
+      pal.append(ws);
+    }
+    backdrop.addEventListener("pointerdown", (e) => {
+      if (e.target === backdrop) close();
+    });
+    backdrop.append(pal);
+    document.body.append(backdrop);
+    const r = this.colorBtn.getBoundingClientRect();
+    pal.style.top = `${r.bottom + 6}px`;
+    pal.style.left = `${Math.max(8, Math.min(window.innerWidth - pal.offsetWidth - 8, r.left - 100))}px`;
+  }
+
+  private openMargins(anchor: HTMLElement): void {
+    const cur = this.scroller.currentMargins;
+    popupMenu(
+      anchor,
+      MARGIN_PRESETS.map(({ label, m }) => ({
+        label: `${m.left === cur.left && m.right === cur.right ? "✓ " : ""}${label}`,
+        run: () => {
+          const shrinking = m.left < cur.left || m.right < cur.right;
+          this.scroller.setMargins(m);
+          this.deps.onMargins(m);
+          if (shrinking && this.deps.ink.pagesWithInk().length) {
+            toast("Ghi chú đã viết ở phần lề vẫn được giữ, nới lề lại là thấy.");
+          }
+        },
+      })),
+    );
+  }
+
+  private undo(): void {
+    const p = this.deps.ink.undo();
+    if (p !== null) this.revealPage(p);
+  }
+
+  private redo(): void {
+    const p = this.deps.ink.redo();
+    if (p !== null) this.revealPage(p);
+  }
+
+  /** After undo on a page that is off-screen, take the reader there. */
+  private revealPage(p: number): void {
+    if (!this.scroller.slotElement(p)) this.scroller.goToPage(p + 1);
+  }
+
+  private updateHistory(): void {
+    this.undoBtn.disabled = !this.deps.ink.canUndo;
+    this.redoBtn.disabled = !this.deps.ink.canRedo;
+  }
+
+  private onHide = (): void => {
+    if (document.visibilityState === "hidden") {
+      void this.deps.ink.flush();
+      this.savePosition();
+    }
+  };
 
   /** Call after the element is in the document. */
   start(): void {
@@ -128,6 +311,10 @@ export class ReaderView {
 
   get scrollerForTests(): PageScroller {
     return this.scroller;
+  }
+
+  get inkForTests(): InkModel {
+    return this.deps.ink;
   }
 
   private jumpFromInput(): void {
@@ -184,6 +371,13 @@ export class ReaderView {
       this.scroller.goToPage(1);
     } else if (e.key === "End") {
       this.scroller.goToPage(this.deps.doc.numPages);
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      if (e.shiftKey) this.redo();
+      else this.undo();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+      e.preventDefault();
+      this.redo();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g") {
       e.preventDefault();
       this.pageInput.focus();
@@ -192,7 +386,10 @@ export class ReaderView {
 
   async destroy(): Promise<void> {
     clearTimeout(this.saveTimer);
+    document.removeEventListener("visibilitychange", this.onHide);
     this.savePosition();
+    this.ink.destroy();
+    await this.deps.ink.flush();
     this.thumbs.destroy();
     this.scroller.destroy();
     this.el.remove();

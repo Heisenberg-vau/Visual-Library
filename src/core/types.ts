@@ -22,6 +22,8 @@ export interface BookMeta {
   categoryId: string | null;
   /** Free labels; a book can have many. */
   tags: string[];
+  /** Widened writing margin beside every page (fractions of page width). */
+  margins: { left: number; right: number };
 }
 
 /** A shelf. Shelves nest: "Hàng không" > "Động cơ". */
