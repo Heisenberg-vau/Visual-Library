@@ -18,6 +18,7 @@ import { StudyStore } from "../core/study/StudyStore";
 import { ReadingStore } from "../core/study/reading";
 import { OcrEngine } from "../core/text/ocr";
 import { TextIndexStore } from "../core/text/TextIndexStore";
+import { IndexService } from "./IndexService";
 import { dayKey } from "../core/study/dates";
 import type { DailyGoal } from "../ui/library/GoalRing";
 import { Ambience } from "../ui/study/Ambience";
@@ -51,6 +52,7 @@ export class App {
   readonly readingStore = new ReadingStore();
   readonly textStore = new TextIndexStore();
   readonly ocr = new OcrEngine();
+  readonly index: IndexService;
   readonly ambience: Ambience;
   readonly study: StudySession;
   private planner: PlannerView | null = null;
@@ -61,7 +63,14 @@ export class App {
     this.library = new LibraryService(meta, createFileStore(), pdfInspector);
     this.library.onDelete((id) => this.inkStore.deleteBook(id));
     this.library.onDelete((id) => this.readingStore.deleteBook(id));
-    this.library.onDelete((id) => this.textStore.deleteBook(id));
+    this.library.onDelete(async (id) => {
+      this.index.remove(id);
+      await this.textStore.deleteBook(id);
+    });
+    this.index = new IndexService(this.library, this.textStore, this.ocr, async (id) => openPdf(await this.library.readFile(id)));
+    this.library.onImport((b) => {
+      if (b.kind === "pdf" && !b.indexDone) this.index.enqueue(b.id);
+    });
     this.ambience = new Ambience(meta);
     this.study = new StudySession(
       meta,
@@ -80,6 +89,7 @@ export class App {
       onPlanner: () => void this.openPlanner(),
       loadTasks: () => this.studyStore.listTasks(),
       loadReading: () => this.readingStore.all(),
+      index: this.index,
       goal: {
         get: () => meta.getSetting<DailyGoal | null>("dailyGoal", null),
         set: (g) => meta.setSetting("dailyGoal", g),
@@ -95,6 +105,7 @@ export class App {
 
   async start(): Promise<void> {
     await Promise.all([this.ambience.init(), this.study.init()]);
+    void this.index.enqueueAll();
     this.root.replaceChildren(this.libraryView.el);
     await this.libraryView.refresh();
     // Reload while reading -> reopen the same book.
@@ -192,7 +203,8 @@ export class App {
         ambience: this.ambience,
         onPageRead: (p) => void this.readingStore.markRead(book.id, p, dayKey(new Date())),
         onBookmarks: (pages) => void this.library.setBookmarks(book.id, pages),
-        textIndex: { store: this.textStore, ocr: this.ocr },
+        indexer: book.kind === "pdf" ? await this.index.get(book.id) : null,
+        index: this.index,
       });
       this.study.bookId = book.id;
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);

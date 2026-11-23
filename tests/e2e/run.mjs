@@ -820,13 +820,15 @@ test("milestone 7: search the whole book and jump to the hit", async () => {
   await backToShelf();
 });
 
-test("milestone 7: a PDF with a broken font encoding becomes searchable", async () => {
+test("milestone 7: a PDF with a broken font encoding is repaired, then OCR'd to be sure", async () => {
   await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/garbled.pdf`]);
-  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /Đã thêm|đã có/.test(t.textContent)));
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("garbled")));
+  const id = await cards().filter({ hasText: "garbled" }).getAttribute("data-id");
+  // OCR starts by itself after import, without opening the book.
+  await page.waitForFunction((bid) => { const s = window.__app.index.statusOf(bid); return s && s.ocrTotal === 1 && s.ocrDone === 1; }, id, { timeout: 120000 });
   await cards().filter({ hasText: "garbled" }).click();
   await page.waitForSelector('[data-testid="scroller"]');
   await openSearch();
-  await page.waitForFunction(() => /sẵn sàng/.test(document.querySelector('[data-testid="index-status"]').textContent), null, { timeout: 30000 });
   await searchFor("combustion chamber");
   await page.waitForSelector('[data-testid="search-result"]');
   assert.match(await page.textContent('[data-testid="search-result"]'), /combustion chamber/i);
@@ -837,12 +839,15 @@ test("milestone 7: a PDF with a broken font encoding becomes searchable", async 
 test("milestone 7: scanned pages are OCR'd in the background, then searchable and highlightable", async () => {
   await page.setInputFiles('[data-testid="file-input"]', [`${FIX}/scanned.pdf`]);
   await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("scanned")));
+  const t0 = Date.now();
+  // Progress shows on the cover while OCR runs in the background, then disappears.
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="book-card"]')].some((c) => c.textContent.includes("scanned") && /OCR/.test(c.querySelector('[data-testid="ocr-status"]')?.textContent ?? "")), null, { timeout: 60000 });
+  await page.waitForFunction(() => { const c = [...document.querySelectorAll('[data-testid="book-card"]')].find((x) => x.textContent.includes("scanned")); return c && c.querySelector('[data-testid="ocr-status"]').hidden; }, null, { timeout: 180000 });
+  console.log(`  OCR of 2 scanned pages (at import): ${Date.now() - t0} ms`);
   await cards().filter({ hasText: "scanned" }).click();
   await page.waitForSelector('[data-testid="scroller"]');
   await openSearch();
-  const t0 = Date.now();
-  await page.waitForFunction(() => /Đã OCR 2 trang/.test(document.querySelector('[data-testid="index-status"]').textContent), null, { timeout: 180000 });
-  console.log(`  OCR of 2 scanned pages: ${Date.now() - t0} ms`);
+  await page.waitForFunction(() => /Đã OCR 2 trang/.test(document.querySelector('[data-testid="index-status"]').textContent));
   await searchFor("nozzle guide vanes");
   await page.waitForSelector('[data-testid="search-result"]');
   assert.equal(await page.getAttribute('[data-testid="search-result"]', "data-page"), "2");

@@ -9,6 +9,7 @@ import { ShelfPanel, type ShelfView } from "./ShelfPanel";
 
 import type { StudySession } from "../study/StudySession";
 import { GoalRing, type GoalDeps } from "./GoalRing";
+import type { IndexService } from "../../app/IndexService";
 import { coverage, type BookReading } from "../../core/study/reading";
 import { dueCount, type Task } from "../../core/study/tasks";
 import { dayKey } from "../../core/study/dates";
@@ -23,6 +24,7 @@ export interface LibraryViewDeps {
   onPlanner: () => void;
   loadTasks: () => Promise<Task[]>;
   loadReading: () => Promise<Map<string, BookReading>>;
+  index: IndexService;
   goal: GoalDeps;
 }
 
@@ -82,6 +84,11 @@ export class LibraryView {
       onclick: () => this.fileInput.click(),
     });
     this.goalRing = new GoalRing(deps.goal);
+    // Live OCR progress on the covers (cheap: only updates one line per card).
+    deps.index.onChange((id) => {
+      const el = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"] [data-testid="ocr-status"]`);
+      if (el) this.renderOcrStatus(id, el);
+    });
     this.plannerBadge = h("span", { class: "badge", hidden: true, "data-testid": "planner-badge" });
     const plannerBtn = h(
       "button",
@@ -424,6 +431,11 @@ export class LibraryView {
             ),
       ),
       isNb ? null : strip,
+      isNb ? null : (() => {
+        const st = h("div", { class: "ocr-status", "data-testid": "ocr-status", hidden: true });
+        this.renderOcrStatus(b.id, st);
+        return st;
+      })(),
       this.selecting ? null : more,
       this.selecting ? null : star,
     );
@@ -441,6 +453,16 @@ export class LibraryView {
       if (e.key === "Enter") activate();
     });
     return card;
+  }
+
+  private renderOcrStatus(id: string, el: HTMLElement): void {
+    const s = this.deps.index.statusOf(id);
+    if (!s || s.ocrTotal === 0 || s.ocrDone >= s.ocrTotal) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    el.textContent = s.running ? `Đang quét OCR ${s.ocrDone}/${s.ocrTotal} trang` : `Chờ quét OCR (${s.ocrDone}/${s.ocrTotal})`;
   }
 
   private async loadCover(id: string, el: HTMLElement): Promise<void> {

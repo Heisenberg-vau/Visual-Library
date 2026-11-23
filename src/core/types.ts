@@ -31,6 +31,10 @@ export interface BookMeta {
   favorite: boolean;
   /** Bookmarked pages (1-based, sorted). */
   bookmarks: number[];
+  /** Search index (incl. OCR) finished for every page. */
+  indexDone?: boolean;
+  /** Imported from this format (the stored original keeps it). */
+  source?: "docx";
 }
 
 /** A shelf. Shelves nest: "Hàng không" > "Động cơ". */

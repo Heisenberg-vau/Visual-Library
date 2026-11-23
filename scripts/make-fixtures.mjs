@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   PDFDocument, PDFName, PDFHexString, PDFNumber, PDFNull, StandardFonts, rgb,
-  pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
+  pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject, setTextRenderingMode, TextRenderingMode,
 } from "pdf-lib";
 
 const OUT = "tests/fixtures";
@@ -119,17 +119,29 @@ async function scannedBook(file) {
   console.log("wrote", file);
 }
 
-/** Text whose codes are shifted by -29, as broken subset fonts produce. */
+/**
+ * Like a real broken-font PDF: the page LOOKS right (an image of the text),
+ * but the selectable text layer has codes shifted by -29.
+ */
 async function garbledBook(file) {
-  const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const { chromium } = await import("playwright-core");
   const lines = [
     "the combustion chamber must burn a large quantity of fuel",
     "supplied through the fuel nozzles with the air from the compressor",
     "and release the heat in such a manner that the air is expanded",
   ];
-  const shift = (t) => [...t].map((c) => (c === " " ? " " : String.fromCharCode(c.charCodeAt(0) - 29))).join("");
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome", args: ["--no-sandbox"] });
+  const page = await browser.newPage({ viewport: { width: 1240, height: 1754 } });
+  await page.setContent(`<html><body style="margin:0;background:#fff;font-family:Arial,Helvetica,sans-serif;color:#111">
+    <div style="position:absolute;left:104px;top:150px;font-size:27px;line-height:50px">${lines.map((l) => `<div>${l}</div>`).join("")}</div></body></html>`);
+  const png = await page.screenshot({ type: "png" });
+  await browser.close();
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
   const p = doc.addPage([595, 842]);
+  p.drawImage(await doc.embedPng(png), { x: 0, y: 0, width: 595, height: 842 });
+  const shift = (t) => [...t].map((c) => (c === " " ? " " : String.fromCharCode(c.charCodeAt(0) - 29))).join("");
+  p.pushOperators(setTextRenderingMode(TextRenderingMode.Invisible));
   lines.forEach((l, i) => p.drawText(shift(l), { x: 50, y: 760 - i * 24, size: 13, font }));
   writeFileSync(file, await doc.save());
   console.log("wrote", file);

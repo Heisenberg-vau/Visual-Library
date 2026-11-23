@@ -123,6 +123,7 @@ export class LibraryService {
       await this.meta.put(book);
       if (info.cover) await this.meta.putCover(id, info.cover);
       report("inspect", 1);
+      for (const fn of this.onImportHooks) fn(book);
       return { status: "added", book };
     } catch (e) {
       await this.files.delete(id).catch(() => {});
@@ -301,6 +302,16 @@ export class LibraryService {
     await this.meta.putMany(
       books.map((b) => ({ ...b, tags: mergeTags(b.tags.filter((t) => !sameTag(t, from)), [to]) })),
     );
+  }
+
+  async setIndexDone(id: string, indexDone: boolean): Promise<void> {
+    await this.meta.update(id, { indexDone });
+  }
+
+  /** Lets other modules react to a newly imported book (start indexing/OCR). */
+  private onImportHooks: ((book: BookMeta) => void)[] = [];
+  onImport(fn: (book: BookMeta) => void): void {
+    this.onImportHooks.push(fn);
   }
 
   async setFavorite(id: string, favorite: boolean): Promise<void> {

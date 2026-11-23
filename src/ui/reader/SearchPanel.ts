@@ -54,7 +54,7 @@ export class SearchPanel {
     if (s.ocrTotal > 0) {
       parts.push(
         s.ocrDone < s.ocrTotal
-          ? `OCR (trang ảnh/lỗi mã): ${s.ocrDone}/${s.ocrTotal}${s.running ? " · đang chạy" : " · tiếp tục khi mở lại sách"}`
+          ? `Đang quét OCR: ${s.ocrDone}/${s.ocrTotal} trang${s.running ? "" : " (đang chờ)"} – kết quả tìm kiếm sẽ thêm dần`
           : `Đã OCR ${s.ocrDone} trang`,
       );
     }

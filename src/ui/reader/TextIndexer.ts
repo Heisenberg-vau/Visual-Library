@@ -7,10 +7,11 @@ export interface IndexStatus {
   total: number;
   /** Pages whose own text has been read. */
   scanned: number;
-  /** Pages that need OCR, and how many are done. */
+  /** Pages that need OCR (scans, broken encodings), and how many are done. */
   ocrTotal: number;
   ocrDone: number;
   running: boolean;
+  queued: boolean;
 }
 
 export interface PageHits {
@@ -21,38 +22,52 @@ export interface PageHits {
 const OCR_SCALE = 2.6; // image px per PDF point (~190 dpi): good accuracy, bounded cost
 const OCR_MAX_PX = 2600;
 
+/** Pages whose words still have to come from OCR. */
+const needsOcr = (p: PageText) => p.source === "pending" || p.source === "fixed";
+
 /**
- * Builds the search index of the open book in the background: the PDF's own
- * text first (quick), then OCR for scanned or unreadable pages, nearest to
- * where you are reading first. Results are saved, so it resumes next time.
+ * The search index of one book: the PDF's own text where it is fine, OCR for
+ * everything else (scans, unreadable text, and text we had to repair, which
+ * gets OCR'd anyway to be sure). Driven by the app-wide IndexService.
  */
 export class TextIndexer {
   private pages = new Map<number, PageText>();
-  private ctrl = new AbortController();
+  private loaded: Promise<void> | null = null;
   private listeners = new Set<(s: IndexStatus) => void>();
-  private started = false;
+  running = false;
+  queued = false;
+  /** Reading position (1-based) to OCR nearby pages first. */
+  currentPage: () => number = () => 1;
 
   constructor(
-    private readonly bookId: string,
-    private readonly doc: PagedDocument,
+    readonly bookId: string,
+    private readonly total: number,
     private readonly store: TextIndexStore,
-    private readonly ocr: OcrEngine,
-    private readonly currentPage: () => number,
   ) {}
 
+  load(): Promise<void> {
+    this.loaded ??= this.store.load(this.bookId).then((m) => {
+      this.pages = m;
+      this.emit();
+    });
+    return this.loaded;
+  }
+
+  get complete(): boolean {
+    if (this.pages.size < this.total) return false;
+    for (const p of this.pages.values()) if (needsOcr(p)) return false;
+    return true;
+  }
+
   get status(): IndexStatus {
-    let scanned = 0;
     let ocrTotal = 0;
     let ocrDone = 0;
     for (const p of this.pages.values()) {
-      scanned++;
-      if (p.source === "pending" || p.source === "ocr") ocrTotal++;
+      if (needsOcr(p) || p.source === "ocr") ocrTotal++;
       if (p.source === "ocr") ocrDone++;
     }
-    return { total: this.doc.numPages, scanned, ocrTotal, ocrDone, running: this.started && !this.ctrl.signal.aborted && this.busy };
+    return { total: this.total, scanned: this.pages.size, ocrTotal, ocrDone, running: this.running, queued: this.queued };
   }
-
-  private busy = false;
 
   onStatus(fn: (s: IndexStatus) => void): () => void {
     this.listeners.add(fn);
@@ -60,50 +75,48 @@ export class TextIndexer {
     return () => void this.listeners.delete(fn);
   }
 
-  private emit(): void {
+  emit(): void {
     const s = this.status;
     for (const fn of this.listeners) fn(s);
   }
 
-  /** OCR words for a page (used to snap highlights on scans), if known. */
-  ocrWords(page: number): WordBox[] | null {
+  /** Words of a page from the index (OCR, Word import…) for highlight snapping. */
+  snapWords(page: number): WordBox[] | null {
     const p = this.pages.get(page);
-    return p?.source === "ocr" ? p.words : null;
+    return p && p.source !== "pdf" && p.source !== "pending" && p.words.length ? p.words : null;
   }
 
-  words(page: number): WordBox[] | null {
-    return this.pages.get(page)?.words ?? null;
+  /** Stores words produced elsewhere (e.g. a converted Word document). */
+  async putWords(page: number, words: WordBox[], source: PageText["source"]): Promise<void> {
+    const rec = await this.store.put({ bookId: this.bookId, page, source, words });
+    this.pages.set(page, rec);
   }
 
-  async start(): Promise<void> {
-    if (this.started) return;
-    this.started = true;
-    this.busy = true;
-    this.pages = await this.store.load(this.bookId);
+  /** Text pass, then OCR pass. Stops early when the signal aborts. */
+  async run(doc: PagedDocument, ocr: OcrEngine, signal: AbortSignal): Promise<void> {
+    await this.load();
+    this.running = true;
     this.emit();
-    const signal = this.ctrl.signal;
     try {
-      await this.textPass(signal);
-      await this.ocrPass(signal);
-    } catch (e) {
-      if (!signal.aborted) console.warn("indexing stopped", e);
+      await this.textPass(doc, signal);
+      await this.ocrPass(doc, ocr, signal);
     } finally {
-      this.busy = false;
+      this.running = false;
       this.emit();
     }
   }
 
-  private async textPass(signal: AbortSignal): Promise<void> {
-    for (let i = 0; i < this.doc.numPages; i++) {
+  private async textPass(doc: PagedDocument, signal: AbortSignal): Promise<void> {
+    for (let i = 0; i < doc.numPages; i++) {
       if (signal.aborted) return;
       if (this.pages.has(i)) continue;
-      const quality = await this.doc.textQuality(i);
-      const chars = quality === "ok" || quality === "fixed" ? await this.doc.textChars(i) : [];
+      const quality = await doc.textQuality(i);
+      const chars = quality === "ok" || quality === "fixed" ? await doc.textChars(i) : [];
       const rec = await this.store.put({
         bookId: this.bookId,
         page: i,
         source: quality === "ok" ? "pdf" : quality === "fixed" ? "fixed" : "pending",
-        words: wordsFromChars(chars),
+        words: wordsFromChars(chars), // repaired text stays searchable until OCR replaces it
       });
       this.pages.set(i, rec);
       if (i % 10 === 9) {
@@ -114,20 +127,20 @@ export class TextIndexer {
     this.emit();
   }
 
-  private async ocrPass(signal: AbortSignal): Promise<void> {
+  private async ocrPass(doc: PagedDocument, ocr: OcrEngine, signal: AbortSignal): Promise<void> {
     for (;;) {
       if (signal.aborted) return;
       const cur = this.currentPage() - 1;
-      const pending = [...this.pages.values()].filter((p) => p.source === "pending").map((p) => p.page);
-      if (!pending.length) return;
-      pending.sort((a, b) => Math.abs(a - cur) - Math.abs(b - cur) || a - b);
-      const page = pending[0];
-      const size = this.doc.pageSize(page);
+      const todo = [...this.pages.values()].filter(needsOcr).map((p) => p.page);
+      if (!todo.length) return;
+      todo.sort((a, b) => Math.abs(a - cur) - Math.abs(b - cur) || a - b);
+      const page = todo[0];
+      const size = doc.pageSize(page);
       const scale = Math.min(OCR_SCALE, OCR_MAX_PX / Math.max(size.width, size.height));
       const canvas = document.createElement("canvas");
-      await this.doc.renderPage(page, canvas, scale, 1, signal);
+      await doc.renderPage(page, canvas, scale, 1, signal);
       if (signal.aborted) return;
-      const words = await this.ocr.recognize(canvas, scale);
+      const words = await ocr.recognize(canvas, scale);
       canvas.width = 0;
       if (signal.aborted) return;
       const rec = await this.store.put({ bookId: this.bookId, page, source: "ocr", words });
@@ -166,10 +179,6 @@ export class TextIndexer {
       }
     }
     return rects.flat();
-  }
-
-  stop(): void {
-    this.ctrl.abort();
   }
 }
 

@@ -6,12 +6,11 @@ import type { PagedDocument } from "../../core/pdf/PagedDocument";
 import type { BookMeta } from "../../core/types";
 import { JobScheduler } from "../../core/util/scheduler";
 import { DWELL_MS } from "../../core/study/reading";
-import type { OcrEngine } from "../../core/text/ocr";
-import type { TextIndexStore } from "../../core/text/TextIndexStore";
+import type { IndexService } from "../../app/IndexService";
 import { layoutChars } from "../../core/text/textGeometry";
 import { runsFromWords } from "../../core/text/words";
 import { SearchPanel } from "./SearchPanel";
-import { TextIndexer } from "./TextIndexer";
+import type { TextIndexer } from "./TextIndexer";
 import { h, icon, iconButton } from "../dom";
 import { modal, popupMenu, toast } from "../feedback";
 import { openExportDialog } from "./ExportDialog";
@@ -39,7 +38,9 @@ export interface ReaderDeps {
   /** A page (0-based) stayed on screen long enough to count as read. */
   onPageRead: (page: number) => void;
   onBookmarks: (pages: number[]) => void;
-  textIndex: { store: TextIndexStore; ocr: OcrEngine };
+  /** This book's search index (shared with the background indexing service). */
+  indexer: TextIndexer | null;
+  index: IndexService;
 }
 
 /** What the reader needs from the app to work with exercise books. */
@@ -117,7 +118,7 @@ export class ReaderView {
   private marksList: HTMLElement;
   private indexer: TextIndexer | null = null;
   private searchPanel: SearchPanel | null = null;
-  private indexTimer = 0;
+
 
   constructor(private readonly deps: ReaderDeps) {
     const { book, doc } = deps;
@@ -181,7 +182,9 @@ export class ReaderView {
       search: mkTab("search", "Tìm"),
     };
     if (!this.isNotebook) {
-      this.indexer = new TextIndexer(book.id, doc, deps.textIndex.store, deps.textIndex.ocr, () => this.scroller.currentPage);
+      this.indexer = deps.indexer;
+    }
+    if (this.indexer) {
       this.searchPanel = new SearchPanel(this.indexer, (page, rects) => {
         if (rects.length) this.scroller.goToPoint(page, rects[1]);
         else this.scroller.goToPage(page + 1);
@@ -209,8 +212,8 @@ export class ReaderView {
     const charsFor = async (p: number) => {
       const own = await doc.textChars(p);
       if (own.length) return own;
-      const ocr = this.indexer?.ocrWords(p);
-      return ocr ? layoutChars(runsFromWords(ocr)) : own;
+      const words = this.indexer?.snapWords(p);
+      return words ? layoutChars(runsFromWords(words)) : own;
     };
     this.ink = new InkLayer(this.scroller, deps.ink, () => this.tools, () => this.updateHistory(), charsFor, {
       onActivity: () => this.setActive(deps.ink, this.scroller),
@@ -697,8 +700,8 @@ export class ReaderView {
     this.scroller.start();
     this.updateBookmarkBtn();
     this.armDwell(this.scroller.currentPage);
-    // Index text after the first pages are on screen.
-    this.indexTimer = window.setTimeout(() => void this.indexer?.start(), 1500);
+    // This book jumps the background indexing/OCR queue, nearest pages first.
+    if (this.indexer) this.deps.index.focus(this.deps.book.id, () => this.scroller.currentPage);
     this.scroller.el.focus({ preventScroll: true });
     const companion = this.deps.notebooks.companionId;
     if (companion && !this.isNotebook) void this.openNotebook(companion);
@@ -858,8 +861,7 @@ export class ReaderView {
   async destroy(): Promise<void> {
     clearTimeout(this.saveTimer);
     clearTimeout(this.dwellTimer);
-    clearTimeout(this.indexTimer);
-    this.indexer?.stop();
+    this.deps.index.focus(null);
     this.searchPanel?.destroy();
     if (this.focusOn) this.setFocus(false, true);
     window.removeEventListener("popstate", this.onPopState);

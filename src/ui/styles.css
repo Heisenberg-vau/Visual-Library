@@ -653,3 +653,5 @@ body[data-tone="dark"] .reader-body { background: #2b2d31; }
 .snippet mark { background: #ffe066; padding: 0 1px; border-radius: 2px; }
 .search-hit { fill: rgb(255 170 0 / 0.18); stroke: #ff8a00; stroke-width: 1.4; }
 .tabs .tab { font-size: 13.5px; padding: 0 4px; }
+
+.ocr-status { font-size: 12px; color: #9a5a12; background: #fff4e5; padding: 4px 12px; border-top: 1px solid #f3dcc0; }
