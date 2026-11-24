@@ -13,6 +13,7 @@ import { UserFacingError } from "../core/types";
 import { toast } from "../ui/feedback";
 import { LibraryView, type ShelfView } from "../ui/library/LibraryView";
 import { HomeView } from "../ui/home3d/HomeView";
+import { evictionCandidate, putOnDesk, removeFromDesk, type DeskItem } from "../core/desk";
 import { DEFAULT_TOOLS, type ToolState } from "../ui/reader/InkLayer";
 import { ReaderView, type NotebookHost } from "../ui/reader/ReaderView";
 import { StudyStore } from "../core/study/StudyStore";
@@ -132,8 +133,14 @@ export class App {
         onList: () => void this.setHomeMode("list"),
         onPlanner: () => void this.openPlanner(),
         onFirstImport: () => void requestPersistentStorage(),
+        loadDesk: () => this.loadDesk(),
+        saveDesk: (d) => this.meta.setSetting("desk", d),
       });
     }
+    this.library.onDelete(async (id) => {
+      const d = await this.loadDesk();
+      if (d.some((x) => x.id === id)) await this.meta.setSetting("desk", removeFromDesk(d, id));
+    });
     this.libraryView.onSwitchTo3d = this.home ? () => void this.setHomeMode("3d") : null;
     window.addEventListener("popstate", () => {
       if (this.reader && !location.hash.startsWith("#read/")) void this.closeReader(false);
@@ -221,6 +228,7 @@ export class App {
     document.body.classList.add("busy");
     try {
       const doc = await this.openDoc(book);
+      await this.toDesk(book);
       const fresh = (await this.library.get(book.id)) ?? book;
       await this.library.markOpened(book.id);
       const ink = await this.openInk(book.id);
@@ -312,6 +320,24 @@ export class App {
     await r.destroy();
     if (!showShelf) return;
     await this.showHome();
+  }
+
+  // ---- the study desk ------------------------------------------------------
+
+  private loadDesk(): Promise<DeskItem[]> {
+    return this.meta.getSetting<DeskItem[]>("desk", []);
+  }
+
+  /** Whatever you open lies on the desk until you put it back (max 6). */
+  private async toDesk(book: BookMeta): Promise<void> {
+    const desk = await this.loadDesk();
+    if (desk.some((d) => d.id === book.id)) return;
+    const all = new Map((await this.library.list()).map((b) => [b.id, b]));
+    const last = (id: string) => all.get(id)?.lastOpenedAt ?? 0;
+    const c = desk.length >= 6 ? evictionCandidate(desk, last) : null;
+    const r = putOnDesk(desk, book.id, Date.now(), last);
+    await this.meta.setSetting("desk", r.items);
+    if (r.evicted && c) toast(`Bàn đã đủ 6 cuốn: đã cất “${all.get(c.id)?.title ?? ""}” lên kệ.`);
   }
 
   // ---- home: 3D room or list ---------------------------------------------

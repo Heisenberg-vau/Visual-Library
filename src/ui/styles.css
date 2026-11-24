@@ -890,3 +890,12 @@ svg.ic { stroke-width: 1.65; }
 .h3-ghost.on { color: #a8792c; }
 .btn-room { gap: 6px; }
 @media (max-width: 760px) { .h3-btn span + * { display: none; } .h3-title { display: none; } }
+.desk-row { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px dashed #d3c09a; }
+.desk-row:first-of-type { margin-top: 6px; }
+.desk-info { flex: 1; min-width: 0; }
+.desk-title { font-family: var(--font-display); font-weight: 700; font-size: 18px; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desk-dust { font-size: 13px; color: #8a5513; margin-top: 2px; }
+.desk-row.dusty .desk-title { color: #6b5843; }
+.desk-actions { display: flex; flex-direction: column; gap: 6px; }
+.desk-actions .h3-ghost { min-height: 36px; font-size: 14px; padding: 0 10px; }
+.h3-panel { max-height: calc(100vh - 100px); overflow: auto; }

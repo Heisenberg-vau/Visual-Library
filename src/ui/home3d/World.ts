@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { CELLS_PER_ATLAS, StackChunk, hash, type ShelfBook } from "./stacks";
-import { corkTexture, floorTexture, noteTexture, pagesTexture, plaqueTexture, plasterTexture, spineTexture, woodTexture, type SpineStyle } from "./textures";
+import { corkTexture, dustTexture, floorTexture, noteTexture, pagesTexture, plaqueTexture, plasterTexture, slipTexture, spineTexture, woodTexture, type SpineStyle } from "./textures";
 
 /*
  * The 3D library room: stacks of the user's real books, a study desk and an
@@ -34,12 +34,20 @@ export interface WorldStack {
 }
 export type WorldView = { kind: "hall" } | { kind: "desk" } | { kind: "board" } | { kind: "stack"; index: number };
 
+export interface DeskEntry {
+  id: string;
+  /** 0 clean … 1 very dusty. */
+  dust: number;
+}
+
 export interface WorldEvents {
   onView: (v: WorldView) => void;
   /** A book was pulled out of (or put back on) a shelf. */
   onPulled: (b: WorldBook | null) => void;
   /** Tapped the pinboard / desk from the hall (HomeView may intercept). */
   onZone?: (zone: "desk" | "board") => boolean;
+  /** Tapped a book lying on the desk. */
+  onDeskBook?: (id: string) => void;
 }
 
 interface Placed {
@@ -49,6 +57,8 @@ interface Placed {
   stack: THREE.Group;
   stackIndex: number;
   mesh: THREE.Mesh | null;
+  /** On the desk: its gap on the shelf holds a paper slip. */
+  slip: THREE.Mesh | null;
 }
 
 interface Spot {
@@ -78,16 +88,16 @@ export class LibraryWorld {
   private placed: Placed[] = [];
   private stacks: WorldStack[] = [];
   private pulled: Placed | null = null;
+  private desk: DeskEntry[] = [];
+  private dustTex: THREE.Texture | null = null;
   private view: WorldView = { kind: "hall" };
   private along = 0;
-  /** Eye height in an aisle (swipe up/down to reach high and low shelves). */
-  private eye = 1.12;
   private anim: { from: Spot; to: Spot; t0: number; dur: number } | null = null;
   private tweens: ((now: number) => boolean)[] = [];
   private running = false;
   private moving = false;
   private paused = false;
-  private drag: { x: number; y: number; along: number; eye: number; moved: boolean } | null = null;
+  private drag: { x: number; y: number; along: number; moved: boolean } | null = null;
   private ray = new THREE.Raycaster();
   private dprIdle = Math.min(window.devicePixelRatio || 1, 2);
   private dprMoving = Math.min(this.dprIdle, 1.1);
@@ -135,9 +145,12 @@ export class LibraryWorld {
   // ------------------------------------------------------------ public API
 
   /** (Re)builds the shelves from the library. Keeps the current view. */
-  setStacks(stacks: WorldStack[]): void {
+  setStacks(stacks: WorldStack[], desk: DeskEntry[] = this.desk): void {
     this.pulled = null;
-    for (const p of this.placed) this.dropMesh(p);
+    for (const p of this.placed) {
+      this.dropMesh(p);
+      p.slip = null; // disposed with its stack
+    }
     this.placed = [];
     this.disposeGroup(this.stacksGroup);
     this.stackInfo = [];
@@ -150,6 +163,7 @@ export class LibraryWorld {
       this.disposeGroup(this.roomGroup);
       this.buildRoom();
     }
+    this.setDesk(desk);
     // keep a valid view
     if (this.view.kind === "stack" && this.view.index >= stacks.length) this.view = { kind: "hall" };
     this.goTo(this.view, true);
@@ -171,10 +185,7 @@ export class LibraryWorld {
   }
 
   goTo(v: WorldView, instant = false): void {
-    if (v.kind === "stack" && v.index !== (this.view.kind === "stack" ? this.view.index : -1)) {
-      this.along = 0;
-      this.eye = 1.12;
-    }
+    if (v.kind === "stack" && v.index !== (this.view.kind === "stack" ? this.view.index : -1)) this.along = 0;
     if (this.pulled && !(v.kind === "stack" && this.view.kind === "stack" && v.index === this.view.index)) this.putBack();
     const to = this.spotFor(v);
     this.view = v;
@@ -216,6 +227,17 @@ export class LibraryWorld {
     return true;
   }
 
+  /** Ids of the books lying on the desk (tests/diagnostics). */
+  get deskIds(): string[] {
+    return this.desk.map((d) => d.id);
+  }
+
+  /** Is the book's own spine on its shelf (not taken out)? */
+  onShelf(id: string): boolean {
+    const p = this.placed.find((x) => x.data.id === id);
+    return !!p && !p.mesh && !p.slip;
+  }
+
   /** Nothing is moving (camera flight, books). */
   get idle(): boolean {
     return !this.anim && this.tweens.length === 0;
@@ -223,6 +245,126 @@ export class LibraryWorld {
 
   get pulledBook(): WorldBook | null {
     return this.pulled?.data ?? null;
+  }
+
+  // ------------------------------------------------------------ the desk
+
+  /** Lays the desk out: those books leave a slip in their gap and lie on the desk. */
+  setDesk(entries: DeskEntry[]): void {
+    this.desk = entries.filter((e) => this.placed.some((p) => p.data.id === e.id));
+    for (const p of this.placed) {
+      const i = this.desk.findIndex((e) => e.id === p.data.id);
+      if (i < 0) {
+        if (p.slip) this.dropSlip(p);
+        if (p.mesh && p !== this.pulled) {
+          p.chunk.setVisible(p.shelf, true);
+          this.dropMesh(p);
+        }
+        continue;
+      }
+      p.chunk.setVisible(p.shelf, false);
+      this.addSlip(p);
+      const m = this.bookMesh(p);
+      const { pos, quat } = this.deskPose(i, p);
+      m.position.copy(pos);
+      m.quaternion.copy(quat);
+      this.setDust(m, p, this.desk[i].dust);
+    }
+    this.renderer.shadowMap.needsUpdate = true;
+    this.kick();
+  }
+
+  /** The pulled-out book goes to the desk (next free place). Resolves when it has landed. */
+  moveToDesk(id: string, dust = 0): Promise<void> {
+    const p = this.placed.find((x) => x.data.id === id);
+    if (!p) return Promise.resolve();
+    if (this.pulled === p) this.pulled = null;
+    this.events.onPulled(null);
+    if (!this.desk.some((e) => e.id === id)) this.desk.push({ id, dust });
+    const i = this.desk.findIndex((e) => e.id === id);
+    p.chunk.setVisible(p.shelf, false);
+    this.addSlip(p);
+    const m = this.bookMesh(p);
+    const { pos, quat } = this.deskPose(i, p);
+    return new Promise((resolve) =>
+      this.tween(m, pos, quat, 1000, () => {
+        this.renderer.shadowMap.needsUpdate = true;
+        resolve();
+      }),
+    );
+  }
+
+  /** A desk book flies back into its gap on the shelf. */
+  returnFromDesk(id: string): Promise<void> {
+    const p = this.placed.find((x) => x.data.id === id);
+    this.desk = this.desk.filter((e) => e.id !== id);
+    if (!p) return Promise.resolve();
+    const m = this.bookMesh(p);
+    this.setDust(m, p, 0);
+    const home = p.stack.localToWorld(p.shelf.pos.clone());
+    return new Promise((resolve) =>
+      this.tween(m, home, new THREE.Quaternion(), 1100, () => {
+        p.chunk.setVisible(p.shelf, true);
+        this.dropSlip(p);
+        this.dropMesh(p);
+        this.renderer.shadowMap.needsUpdate = true;
+        resolve();
+      }),
+    );
+  }
+
+  private deskPose(i: number, p: Placed): { pos: THREE.Vector3; quat: THREE.Quaternion } {
+    // two rows of three, a little askew like real books put down
+    const spots = [[-0.6, 0.17], [-0.27, 0.19], [0.06, 0.16], [-0.55, -0.2], [-0.22, -0.18], [0.12, -0.21]];
+    const [x, z] = spots[i % spots.length];
+    const tilt = [0.12, -0.08, 0.05, -0.1, 0.09, -0.04][i % 6];
+    const pos = new THREE.Vector3(this.DESK.x + x, 0.788 + p.shelf.t / 2, this.DESK.z + z);
+    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, tilt));
+    return { pos, quat };
+  }
+
+  private addSlip(p: Placed): void {
+    if (p.slip) return;
+    const sb = p.shelf;
+    const slip = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(0.03, sb.t * 0.9), sb.h * 0.55), new THREE.MeshStandardMaterial({ map: slipTexture("Trên bàn học"), roughness: 0.9 }));
+    slip.rotation.y = -Math.PI / 2;
+    const at = sb.pos.clone();
+    at.x = -STACK_W / 2 + 0.03;
+    at.y = sb.pos.y - sb.h / 2 + (sb.h * 0.55) / 2 + 0.005;
+    slip.position.copy(at);
+    slip.rotation.x = 0.06;
+    p.stack.add(slip);
+    p.slip = slip;
+  }
+
+  private dropSlip(p: Placed): void {
+    if (!p.slip) return;
+    p.stack.remove(p.slip);
+    p.slip.geometry.dispose();
+    const m = p.slip.material as THREE.MeshStandardMaterial;
+    m.map?.dispose();
+    m.dispose();
+    p.slip = null;
+  }
+
+  private setDust(m: THREE.Mesh, p: Placed, level: number): void {
+    let dust = m.getObjectByName("dust") as THREE.Mesh | undefined;
+    if (level <= 0) {
+      if (dust) {
+        m.remove(dust);
+        dust.geometry.dispose();
+        (dust.material as THREE.Material).dispose();
+      }
+      return;
+    }
+    this.dustTex ??= dustTexture();
+    if (!dust) {
+      dust = new THREE.Mesh(new THREE.PlaneGeometry(p.shelf.d, p.shelf.h), new THREE.MeshStandardMaterial({ map: this.dustTex, transparent: true, depthWrite: false, roughness: 1 }));
+      dust.name = "dust";
+      dust.position.z = p.shelf.t / 2 + 0.0008; // just over the cover
+      m.add(dust);
+    }
+    (dust.material as THREE.MeshStandardMaterial).opacity = 0.35 + level * 0.6;
   }
 
   /** Stop drawing (another screen is shown). */
@@ -554,25 +696,19 @@ export class LibraryWorld {
   /** One stack per top-level shelf; one tier (shelf board) per sub-shelf. */
   private buildStack(s: WorldStack, si: number): void {
     const mat = this.mat;
-    // lay out books: rows of at most maxLen metres; a tier that is too long wraps
-    const rows: { label: string; books: WorldBook[]; width: number }[] = [];
-    const maxLen = 5.6;
-    for (const tier of s.tiers) {
-      let row = { label: tier.name, books: [] as WorldBook[], width: 0 };
-      for (const b of tier.books) {
-        const t = thickness(b);
-        if (row.width + t > maxLen && row.books.length) {
-          rows.push(row);
-          row = { label: `${tier.name} (tiếp)`, books: [], width: 0 };
-        }
-        row.books.push(b);
-        row.width += t + 0.003;
-      }
-      rows.push(row);
-    }
-    while (rows.length < 4) rows.push({ label: "", books: [], width: 0 });
-    const L = Math.max(2.4, Math.min(maxLen + 0.3, Math.max(...rows.map((r) => r.width)) + 0.3));
-    const H = rows.length * SHELF_GAP + 0.2;
+    // Every stack has 4 equal tiers. Up to 4 sub-shelves get a tier each;
+    // with more, each group goes onto the emptiest tier, after a labelled gap.
+    const TIERS = 4;
+    const tiers: { width: number; segs: { label: string; start: number; books: WorldBook[] }[] }[] = Array.from({ length: TIERS }, () => ({ width: 0, segs: [] }));
+    s.tiers.forEach((grp, gi) => {
+      const tier = s.tiers.length <= TIERS ? tiers[gi] : tiers.reduce((m, t) => (t.width < m.width ? t : m), tiers[0]);
+      const start = tier.width ? tier.width + 0.14 : 0;
+      const w = grp.books.reduce((sum, b) => sum + thickness(b) + 0.003, 0);
+      tier.segs.push({ label: grp.name, start, books: grp.books });
+      tier.width = start + Math.max(w, 0.36); // room for the label even when empty
+    });
+    const L = Math.max(2.4, Math.max(...tiers.map((t) => t.width)) + 0.24);
+    const H = TIERS * SHELF_GAP + 0.2;
     const W = STACK_W;
     const x = STACK_X0 + si * STACK_DX;
     const g = new THREE.Group();
@@ -592,55 +728,58 @@ export class LibraryWorld {
     const plinth = this.box(W + 0.02, 0.09, L, mat.walnutDark);
     plinth.position.set(0, 0.045, 0);
     g.add(mid, top, crown, plinth);
-    const shelfYs = rows.map((_, i) => 0.1 + i * SHELF_GAP);
-    for (const y of [...shelfYs, rows.length * SHELF_GAP + 0.1]) {
+    const shelfYs = tiers.map((_, i) => 0.1 + i * SHELF_GAP);
+    for (const y of [...shelfYs, TIERS * SHELF_GAP + 0.1]) {
       const sh = this.box(W, 0.03, L - 0.05, mat.walnut);
       sh.position.set(0, y, 0);
       g.add(sh);
     }
-    // plaque on the end facing the room, and one on the left end too
     const plaqueMat = new THREE.MeshStandardMaterial({ map: plaqueTexture(s.name), metalness: 0.75, roughness: 0.35 });
     const plaque = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.155), plaqueMat);
-    plaque.position.set(0, Math.min(H - 0.25, 1.62), L / 2 + 0.027);
+    plaque.position.set(0, H - 0.25, L / 2 + 0.027);
     g.add(plaque);
-    // books on the LEFT face; tier labels on the shelf edges
+    // books on the LEFT face; a brass label on the shelf edge where each group starts
     const shelfBooks: ShelfBook[] = [];
     const data: WorldBook[] = [];
-    rows.forEach((row, ri) => {
-      const shelfTop = shelfYs[ri] + 0.015;
-      if (row.label) {
-        const lab = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.075), new THREE.MeshStandardMaterial({ map: plaqueTexture(row.label), metalness: 0.7, roughness: 0.35 }));
-        lab.rotation.y = -Math.PI / 2;
-        lab.position.set(-W / 2 - 0.004, shelfYs[ri] - 0.005, 0);
-        lab.scale.set(1, 0.72, 1);
-        g.add(lab);
-      }
-      let z = -L / 2 + 0.06;
-      for (const b of row.books) {
-        const t = thickness(b);
-        const seed = hash(b.id);
-        const h = 0.26 + ((seed >>> 10) % 100) / 100 * 0.09;
-        shelfBooks.push({
-          id: b.id,
-          title: b.title,
-          author: b.subtitle,
-          color: b.color,
-          cloth: b.cloth,
-          d: BOOK_D,
-          h,
-          t,
-          pos: new THREE.Vector3(-(W / 2 - BOOK_D / 2 - 0.015), shelfTop + h / 2, z + t / 2),
-          ribbon: b.ribbon,
-          favorite: b.favorite,
-        });
-        data.push(b);
-        z += t + 0.003;
+    tiers.forEach((tier, ti) => {
+      const shelfTop = shelfYs[ti] + 0.015;
+      for (const seg of tier.segs) {
+        const z0 = -L / 2 + 0.06 + seg.start;
+        if (seg.label) {
+          const lab = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.075), new THREE.MeshStandardMaterial({ map: plaqueTexture(seg.label), metalness: 0.7, roughness: 0.35 }));
+          lab.rotation.y = -Math.PI / 2;
+          // on the shelf edge, proud of the plinth so the bottom one shows too
+          lab.position.set(-W / 2 - 0.018, shelfYs[ti] + (ti === 0 ? 0.02 : -0.005), Math.min(L / 2 - 0.25, z0 + 0.21));
+          lab.scale.set(1, 0.72, 1);
+          g.add(lab);
+        }
+        let z = z0;
+        for (const b of seg.books) {
+          const t = thickness(b);
+          const seed = hash(b.id);
+          const h = 0.26 + (((seed >>> 10) % 100) / 100) * 0.09;
+          shelfBooks.push({
+            id: b.id,
+            title: b.title,
+            author: b.subtitle,
+            color: b.color,
+            cloth: b.cloth,
+            d: BOOK_D,
+            h,
+            t,
+            pos: new THREE.Vector3(-(W / 2 - BOOK_D / 2 - 0.015), shelfTop + h / 2, z + t / 2),
+            ribbon: b.ribbon,
+            favorite: b.favorite,
+          });
+          data.push(b);
+          z += t + 0.003;
+        }
       }
     });
     for (let i = 0; i < shelfBooks.length; i += CELLS_PER_ATLAS) {
       const chunk = new StackChunk(shelfBooks.slice(i, i + CELLS_PER_ATLAS), this.spineStyle, this.renderer);
       g.add(chunk.mesh);
-      chunk.books.forEach((sb, k) => this.placed.push({ data: data[i + k], shelf: sb, chunk, stack: g, stackIndex: si, mesh: null }));
+      chunk.books.forEach((sb, k) => this.placed.push({ data: data[i + k], shelf: sb, chunk, stack: g, stackIndex: si, mesh: null, slip: null }));
     }
     this.stacksGroup.add(g);
     this.stackInfo.push({ x, L, H, group: g });
@@ -655,7 +794,8 @@ export class LibraryWorld {
       const s = this.stackInfo[v.index];
       if (s) {
         const x = s.x - STACK_W / 2;
-        return { pos: new THREE.Vector3(x - 0.86, this.eye, STACK_Z + this.along), look: new THREE.Vector3(x, this.eye - 0.12, STACK_Z + this.along), fov: 58 };
+        // far enough to see all 4 tiers at once
+        return { pos: new THREE.Vector3(x - 1.75, 0.98, STACK_Z + this.along), look: new THREE.Vector3(x, 0.95, STACK_Z + this.along), fov: 58 };
       }
     }
     // hall: frame the desk, the board and every stack
@@ -668,17 +808,18 @@ export class LibraryWorld {
 
   private focusOn(p: Placed): void {
     const s = this.stackInfo[p.stackIndex];
-    const lim = Math.max(0, s.L / 2 - 0.6);
+    const lim = this.alongLimit(s.L);
     this.along = THREE.MathUtils.clamp(p.shelf.pos.z, -lim, lim);
-    this.eye = this.clampEye(p.shelf.pos.y + 0.12, s.H);
+
     const to = this.spotFor(this.view);
     this.camera.position.copy(to.pos);
     this.target.copy(to.look);
     this.camera.lookAt(this.target);
   }
 
-  private clampEye(y: number, H: number): number {
-    return THREE.MathUtils.clamp(y, 0.55, Math.max(0.55, H - 0.3));
+  /** How far the view may slide along a stack (the view is ~3 m wide). */
+  private alongLimit(L: number): number {
+    return Math.max(0, L / 2 - 1.3);
   }
 
   // ------------------------------------------------------------ books out of the shelf
@@ -717,6 +858,11 @@ export class LibraryWorld {
 
   private dropMesh(p: Placed): void {
     if (!p.mesh) return;
+    const dust = p.mesh.getObjectByName("dust") as THREE.Mesh | undefined;
+    if (dust) {
+      dust.geometry.dispose();
+      (dust.material as THREE.Material).dispose();
+    }
     this.scene.remove(p.mesh);
     p.mesh.geometry.dispose();
     for (const m of p.mesh.material as THREE.MeshStandardMaterial[]) {
@@ -763,7 +909,7 @@ export class LibraryWorld {
   // ------------------------------------------------------------ input
 
   private onDown = (e: PointerEvent): void => {
-    this.drag = { x: e.clientX, y: e.clientY, along: this.along, eye: this.eye, moved: false };
+    this.drag = { x: e.clientX, y: e.clientY, along: this.along, moved: false };
     this.renderer.domElement.setPointerCapture?.(e.pointerId);
   };
 
@@ -774,10 +920,10 @@ export class LibraryWorld {
     if (Math.abs(dx) > 6 || Math.abs(e.clientY - d.y) > 6) d.moved = true;
     if (d.moved && this.view.kind === "stack" && !this.anim) {
       const s = this.stackInfo[this.view.index];
-      const lim = Math.max(0, s.L / 2 - 0.6);
-      // the shelf follows the finger, sideways and up/down
-      this.along = THREE.MathUtils.clamp(d.along - dx * 0.004, -lim, lim);
-      this.eye = this.clampEye(d.eye + (e.clientY - d.y) * 0.004, s.H);
+      const lim = this.alongLimit(s.L);
+      // the shelf follows the finger
+      this.along = THREE.MathUtils.clamp(d.along - dx * 0.0055, -lim, lim);
+
       const to = this.spotFor(this.view);
       this.camera.position.copy(to.pos);
       this.target.copy(to.look);
@@ -801,7 +947,13 @@ export class LibraryWorld {
         const p = sb ? this.placed.find((x) => x.shelf === sb) : undefined;
         if (p) return this.pull(p);
       }
-      if (o.userData.placed) return; // the pulled-out book itself
+      const placed = (o.userData.placed ?? o.parent?.userData.placed) as Placed | undefined;
+      if (placed) {
+        const onDesk = this.desk.some((d) => d.id === placed.data.id);
+        if (onDesk && this.view.kind === "desk") this.events.onDeskBook?.(placed.data.id);
+        else if (onDesk && this.view.kind === "hall") this.goTo({ kind: "desk" });
+        return; // the pulled-out book itself
+      }
       while (o && !o.userData.zone) o = o.parent;
       const zone = o?.userData.zone as string | undefined;
       if (zone && this.view.kind === "hall") {

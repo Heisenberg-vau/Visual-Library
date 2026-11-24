@@ -275,7 +275,13 @@ export function plaqueTexture(text: string): THREE.CanvasTexture {
   ctx.strokeStyle = "#5a4218";
   ctx.lineWidth = 4;
   ctx.strokeRect(10, 10, 492, 140);
-  ctx.font = `700 64px "Cormorant Garamond", Georgia, serif`;
+  // shrink long names to fit the plate
+  let size = 64;
+  ctx.font = `700 ${size}px "Cormorant Garamond", Georgia, serif`;
+  while (ctx.measureText(text).width > 460 && size > 26) {
+    size -= 2;
+    ctx.font = `700 ${size}px "Cormorant Garamond", Georgia, serif`;
+  }
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = "rgba(255,240,200,0.6)";
@@ -299,5 +305,51 @@ export function noteTexture(title: string, lines: string[], paper = "#fbf5e2"): 
   lines.forEach((l, i) => ctx.fillText(l, 28, 120 + i * 46));
   const t = tex(c);
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+
+/** Fine grey dust for books left on the desk (used with transparency). */
+export function dustTexture(): THREE.CanvasTexture {
+  const [c, ctx] = canvas(256, 256);
+  const r = rng(99);
+  ctx.clearRect(0, 0, 256, 256);
+  for (let i = 0; i < 9000; i++) {
+    const g = 190 + Math.floor(r() * 50);
+    ctx.fillStyle = `rgba(${g},${g - 6},${g - 16},${0.15 + r() * 0.45})`;
+    const s = 0.6 + r() * 1.8;
+    ctx.fillRect(r() * 256, r() * 256, s, s);
+  }
+  // a few wipes and smudges
+  for (let i = 0; i < 6; i++) {
+    const gr = ctx.createRadialGradient(r() * 256, r() * 256, 4, r() * 256, r() * 256, 60 + r() * 60);
+    gr.addColorStop(0, "rgba(210,200,180,0.25)");
+    gr.addColorStop(1, "rgba(210,200,180,0)");
+    ctx.fillStyle = gr;
+    ctx.fillRect(0, 0, 256, 256);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** The paper slip left in the gap of a book taken to the desk. */
+export function slipTexture(text: string): THREE.CanvasTexture {
+  const [c, ctx] = canvas(96, 384);
+  ctx.fillStyle = "#f3ead2";
+  ctx.fillRect(0, 0, 96, 384);
+  ctx.strokeStyle = "#b8903f";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(6, 6, 84, 372);
+  ctx.save();
+  ctx.translate(48, 192);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = "#3b2719";
+  ctx.font = `700 34px "Cormorant Garamond", Georgia, serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }

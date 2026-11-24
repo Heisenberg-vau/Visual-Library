@@ -1162,6 +1162,8 @@ test("v1.1: the 3D room shows every shelf as a stack, cheaply", async () => {
     const ids = new Set(cats.map((c) => c.id));
     return books.some((b) => !b.categoryId || !ids.has(b.categoryId));
   });
+  // earlier tests opened many books (they all landed on the desk): start clean
+  await W(() => window.__app.meta.setSetting("desk", []));
   await page.click('[data-testid="to-3d"]');
   await page.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
   const info = await W(() => window.__world.info());
@@ -1173,7 +1175,7 @@ test("v1.1: the 3D room shows every shelf as a stack, cheaply", async () => {
   await shot("50-room-hall");
 });
 
-test("v1.1: walk to a stack, pull a real book out by its spine, open it, come back to the same spot", async () => {
+test("v1.1/1.2: walk to a stack, pull a book out by its spine, open it: it lies on the desk, its gap holds a slip", async () => {
   const target = await W(async () => {
     const all = await window.__app.library.list();
     return all.find((b) => b.title.includes("650")) ?? all[0];
@@ -1199,16 +1201,73 @@ test("v1.1: walk to a stack, pull a real book out by its spine, open it, come ba
   await page.click('[data-testid="h3-open"]');
   await page.waitForSelector('[data-testid="scroller"]');
   await backToShelf3d();
-  assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), `stack:${si}`, "back where you were");
-  // and after a reload too
+  assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), "desk", "back at the desk, where the book now lies");
+  assert.deepEqual(await W(() => window.__world.deskIds), [target.id]);
+  assert.equal(await W((id) => window.__world.onShelf(id), target.id), false, "its place on the shelf is empty (with a slip)");
+  assert.equal(await page.textContent('[data-testid="desk-count"]'), "TRÊN BÀN · 1/6");
+  await page.waitForFunction(() => window.__world.idle);
+  await shot("52-desk");
+  // remembered across restarts
   await page.reload();
   await page.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
-  assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), `stack:${si}`, "remembered across restarts");
+  assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), "desk");
+  assert.deepEqual(await W(() => window.__world.deskIds), [target.id]);
+  // put it back: it flies into its gap
+  await page.click('[data-testid="desk-back"]');
+  await page.waitForFunction((id) => window.__world.idle && window.__world.onShelf(id), target.id, { timeout: 15000 });
+  assert.equal(await page.textContent('[data-testid="desk-count"]'), "TRÊN BÀN · 0/6");
+  // whole stack in view: all 4 tiers' books project inside the screen
+  await W((i) => window.__world.goTo({ kind: "stack", index: i }, true), si);
+  const stack = await W((i) => window.__world.stackAt(i), si);
+  const firstPerTier = stack.tiers.map((t) => t.books[0]).filter(Boolean).map((b) => b.id);
+  for (const id of firstPerTier) {
+    await W((x) => { window.__world.pullById(x); window.__world.putBack(); }, id);
+    await page.waitForFunction(() => window.__world.idle);
+    await W((i) => window.__world.goTo({ kind: "stack", index: i }, true), si);
+    const p = await W((x) => window.__world.spineScreenPoint(x), id);
+    assert.ok(p.y > 58 && p.y < 800, `tier visible without swiping (y=${Math.round(p.y)})`);
+  }
+});
+
+test("v1.2: the desk holds 6 at most; dusty books get a reminder", async () => {
+  const all = await W(async () => (await window.__app.library.list()).map((b) => b.id));
+  assert.ok(all.length >= 7);
+  const now = Date.now();
+  const six = all.slice(0, 6).map((id, i) => ({ id, at: now - (i === 2 ? 20 : 0) * 86400000 }));
+  await W(async ([items, old]) => {
+    await window.__app.meta.setSetting("desk", items);
+    await window.__app.library.meta.update(old, { lastOpenedAt: Date.now() - 20 * 86400000 });
+  }, [six, six[2].id]);
+  await W(() => window.__world.goTo({ kind: "desk" }, true));
+  await page.click('[data-testid="h3-hall"]');
+  await page.click('[data-testid="h3-list"]');
+  await page.click('[data-testid="to-3d"]');
+  await page.waitForSelector('[data-testid="home3d"][data-ready="1"]');
+  await W(() => window.__world.goTo({ kind: "desk" }));
+  await page.waitForFunction(() => window.__world.idle);
+  assert.equal(await page.textContent('[data-testid="desk-count"]'), "TRÊN BÀN · 6/6");
+  assert.equal(await page.locator('[data-testid="desk-dust"]').count(), 1, "one dusty book");
+  assert.match(await page.locator('[data-testid="desk-dust"]').textContent(), /20 ngày chưa mở/);
+  await shot("53-desk-full-dusty");
+  // a 7th book: asks to put back the one untouched the longest
+  const seventh = all[6];
+  await W((id) => window.__world.pullById(id), seventh);
+  await page.waitForSelector('[data-testid="h3-open"]');
+  await page.click('[data-testid="h3-open"]');
+  await page.waitForSelector(".modal");
+  assert.match(await page.textContent(".modal"), /Bàn học đã đủ 6 cuốn/);
+  await page.locator(".modal .btn", { hasText: "Cất và lấy sách" }).click();
+  await page.waitForSelector('[data-testid="scroller"]', { timeout: 30000 });
+  await backToShelf3d();
+  const desk = await W(() => window.__world.deskIds);
+  assert.equal(desk.length, 6);
+  assert.ok(desk.includes(seventh) && !desk.includes(six[2].id), "the dusty one went back to its shelf");
+  await W(() => window.__app.meta.setSetting("desk", []));
 });
 
 test("v1.1: favourite from the pulled-out book; import lands on the stack you stand at", async () => {
-  const v = await page.getAttribute('[data-testid="home3d"]', "data-view");
-  const si = Number(v.split(":")[1]);
+  const si = 0;
+  await W(() => window.__world.goTo({ kind: "stack", index: 0 }, true));
   const stack = await W((i) => window.__world.stackAt(i), si);
   const book = stack.tiers.flatMap((t) => t.books).find((b) => !b.cloth);
   await W((id) => window.__world.pullById(id), book.id);

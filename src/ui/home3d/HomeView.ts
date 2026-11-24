@@ -2,9 +2,10 @@ import type { LibraryService, ImportResult } from "../../core/storage/LibrarySer
 import type { BookMeta, Category } from "../../core/types";
 import type { BookReading } from "../../core/study/reading";
 import { h, icon } from "../dom";
-import { popupMenu, toast } from "../feedback";
+import { confirmDialog, popupMenu, toast } from "../feedback";
+import { DESK_MAX, dustLevel, evictionCandidate, idleDays, putOnDesk, removeFromDesk, type DeskItem } from "../../core/desk";
 import type { SpineStyle } from "./textures";
-import { LibraryWorld, type WorldBook, type WorldStack, type WorldView } from "./World";
+import { LibraryWorld, type DeskEntry, type WorldBook, type WorldStack, type WorldView } from "./World";
 
 /*
  * The library as a 3D room (the app's home): stacks built from the user's
@@ -19,6 +20,8 @@ export interface HomeDeps {
   onList: () => void;
   onPlanner: () => void;
   onFirstImport: () => void;
+  loadDesk: () => Promise<DeskItem[]>;
+  saveDesk: (items: DeskItem[]) => Promise<void>;
 }
 
 const VIEW_KEY = "vl.view";
@@ -37,6 +40,7 @@ export class HomeView {
   private colors = new Map<string, string>();
   private stacks: WorldStack[] = [];
   private busy = false;
+  private desk: DeskItem[] = [];
 
   /** WebGL may be unavailable (very old devices): then the list view is used. */
   static supported(): boolean {
@@ -99,6 +103,10 @@ export class HomeView {
       {
         onView: (v) => this.onView(v),
         onPulled: (b) => this.renderPanel(b),
+        onDeskBook: (id) => {
+          const b = this.books.get(id);
+          if (b) this.deps.onOpen(b);
+        },
         // The pinboard is the planner screen for now.
         onZone: (z) => {
           if (z === "board") {
@@ -119,9 +127,10 @@ export class HomeView {
   async refresh(): Promise<void> {
     const world = this.ensureWorld();
     world.resume();
-    const [books, cats, reading] = await Promise.all([this.deps.library.list(), this.deps.library.listCategories(), this.deps.loadReading()]);
+    const [books, cats, reading, desk] = await Promise.all([this.deps.library.list(), this.deps.library.listCategories(), this.deps.loadReading(), this.deps.loadDesk()]);
     this.reading = reading;
     this.books = new Map(books.map((b) => [b.id, b]));
+    this.desk = desk.filter((d) => this.books.has(d.id));
     const sig = JSON.stringify([
       books.map((b) => [b.id, b.title, b.categoryId, b.pageCount, b.favorite, b.lastPage > 1, b.kind]),
       cats.map((c) => [c.id, c.name, c.parentId]),
@@ -133,11 +142,20 @@ export class HomeView {
       this.signature = sig;
       await this.loadColors(books);
       this.stacks = this.buildStacks(books, cats);
-      world.setStacks(this.stacks);
+      world.setStacks(this.stacks, this.deskEntries());
       this.restoreView(saved);
-    }
+    } else world.setDesk(this.deskEntries());
+    const v = world.currentView;
+    if (v.kind === "desk") this.renderDesk();
     this.el.dataset.ready = "1";
   }
+
+  private deskEntries(): DeskEntry[] {
+    const now = Date.now();
+    return this.desk.map((d) => ({ id: d.id, dust: dustLevel(idleDays(d, this.books.get(d.id)?.lastOpenedAt ?? 0, now)) }));
+  }
+
+  private lastOpened = (id: string) => this.books.get(id)?.lastOpenedAt ?? 0;
 
   pause(): void {
     this.world?.pause();
@@ -235,10 +253,8 @@ export class HomeView {
     } catch {
       /* ignore */
     }
-    if (v.kind === "desk") {
-      this.panel.hidden = false;
-      this.panel.replaceChildren(h("div", { class: "h3-k" }, "BÀN HỌC"), h("p", { class: "h3-muted" }, "Lấy sách xuống bàn, sách đang đọc dở và vở sẽ có ở bản tiếp theo."));
-    } else if (!this.world?.pulledBook) this.panel.hidden = true;
+    if (v.kind === "desk") this.renderDesk();
+    else if (!this.world?.pulledBook) this.panel.hidden = true;
   }
 
   private savedView(): { kind: string; id?: string | null } | null {
@@ -275,7 +291,7 @@ export class HomeView {
     const r = this.reading.get(b.id);
     const pct = r && b.pageCount ? Math.round((r.count / b.pageCount) * 100) : 0;
     const open = h("button", { class: "h3-primary", type: "button", "data-testid": "h3-open" }, b.kind === "notebook" ? "Mở vở" : "Mở sách");
-    open.addEventListener("click", () => this.deps.onOpen(b));
+    open.addEventListener("click", () => void this.takeAndOpen(b));
     const fav = h("button", { class: `h3-ghost ${b.favorite ? "on" : ""}`, type: "button", "data-testid": "h3-fav", title: "Yêu thích" }, b.favorite ? "★" : "☆");
     fav.addEventListener("click", async () => {
       await this.deps.library.setFavorite(b.id, !b.favorite);
@@ -301,6 +317,70 @@ export class HomeView {
       h("div", { class: "h3-row" }, open, fav, back),
     ];
     this.panel.replaceChildren(...parts.filter((x): x is HTMLElement => !!x));
+  }
+
+  // ------------------------------------------------------------ the desk
+
+  /** "Mở sách": the book goes onto the desk (making room if needed), then opens. */
+  private async takeAndOpen(b: BookMeta): Promise<void> {
+    const world = this.world!;
+    if (!this.desk.some((d) => d.id === b.id)) {
+      if (this.desk.length >= DESK_MAX) {
+        const c = evictionCandidate(this.desk, this.lastOpened)!;
+        const name = this.books.get(c.id)?.title ?? "một cuốn";
+        const ok = await confirmDialog(
+          "Bàn học đã đủ 6 cuốn",
+          `Cất “${name}” (lâu nhất chưa mở) lên kệ để lấy “${b.title}” xuống bàn?`,
+          "Cất và lấy sách",
+        );
+        if (!ok) return;
+        await world.returnFromDesk(c.id);
+        this.desk = removeFromDesk(this.desk, c.id);
+      }
+      this.desk = putOnDesk(this.desk, b.id, Date.now(), this.lastOpened).items;
+      await this.deps.saveDesk(this.desk);
+      world.goTo({ kind: "desk" });
+      await world.moveToDesk(b.id);
+    }
+    this.deps.onOpen(b);
+  }
+
+  private async putBack(id: string): Promise<void> {
+    this.desk = removeFromDesk(this.desk, id);
+    await this.deps.saveDesk(this.desk);
+    this.renderDesk();
+    await this.world?.returnFromDesk(id);
+  }
+
+  private renderDesk(): void {
+    if (this.world?.currentView.kind !== "desk") return;
+    const now = Date.now();
+    const rows = this.desk.map((d) => {
+      const b = this.books.get(d.id)!;
+      const days = idleDays(d, b.lastOpenedAt ?? 0, now);
+      const dusty = dustLevel(days) > 0;
+      const read = h("button", { class: "h3-ghost", type: "button", "data-testid": "desk-open" }, "Đọc tiếp");
+      read.addEventListener("click", () => this.deps.onOpen(b));
+      const back = h("button", { class: "h3-ghost", type: "button", "data-testid": "desk-back" }, "Cất lên kệ");
+      back.addEventListener("click", () => void this.putBack(d.id));
+      return h(
+        "div",
+        { class: `desk-row ${dusty ? "dusty" : ""}`, "data-testid": "desk-row", "data-id": d.id },
+        h(
+          "div",
+          { class: "desk-info" },
+          h("div", { class: "desk-title" }, b.title),
+          h("div", { class: "h3-muted" }, b.kind === "notebook" ? `Vở · trang ${b.lastPage}` : `Trang ${b.lastPage}/${b.pageCount}`),
+          dusty ? h("div", { class: "desk-dust", "data-testid": "desk-dust" }, `Phủ bụi · ${days} ngày chưa mở – cất lên kệ?`) : null,
+        ),
+        h("div", { class: "desk-actions" }, read, back),
+      );
+    });
+    this.panel.hidden = false;
+    this.panel.replaceChildren(
+      h("div", { class: "h3-k", "data-testid": "desk-count" }, `TRÊN BÀN · ${this.desk.length}/${DESK_MAX}`),
+      ...(rows.length ? rows : [h("p", { class: "h3-muted" }, "Bàn đang trống. Rút một cuốn từ kệ và bấm “Mở sách” – sách sẽ nằm ở đây cho tới khi bạn cất.")]),
+    );
   }
 
   // ------------------------------------------------------------ import & settings
