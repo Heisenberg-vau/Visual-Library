@@ -143,6 +143,15 @@ export class App {
           await pv.refresh();
           return pv.edit(t, date, kind);
         },
+        loadPictures: async () => {
+          const out = new Map<number, Blob>();
+          for (let i = 0; i < 5; i++) {
+            const b = await this.meta.getSetting<Blob | null>(`picture:${i}`, null);
+            if (b) out.set(i, b);
+          }
+          return out;
+        },
+        savePicture: (i, b) => this.meta.setSetting(`picture:${i}`, b),
       });
     }
     this.library.onDelete(async (id) => {

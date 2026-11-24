@@ -9,6 +9,7 @@ import { chromium } from "playwright-core";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { PDFName, PDFDocument } from "pdf-lib";
+import { deflateSync } from "node:zlib";
 
 const PORT = 4173;
 const URL = `http://localhost:${PORT}/`;
@@ -1357,6 +1358,61 @@ test("v1.4: hall shortcuts; walking between zones goes round the bookcases, neve
   await walk(() => page.click('[data-testid="h3-board"]'));
   assert.ok(await page.isHidden('[data-testid="h3-strip"]'), "no shortcuts over the board panel");
   await walk(() => page.click('[data-testid="h3-hall"]'));
+});
+
+/** A small PNG (a 2400×1600 gradient, like a tablet photo) without any image library. */
+function testPng(w = 2400, h = 1600) {
+  const crcT = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const o = y * (w * 3 + 1) + 1 + x * 3; raw[o] = (x * 255) / w; raw[o + 1] = 90; raw[o + 2] = (y * 255) / h; }
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+test("v1.5.1: your own picture in a frame on the wall; kept small; back to the painting", async () => {
+  await page.click('[data-testid="h3-hall"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="home3d"]').dataset.view === "hall" && window.__world.idle);
+  const slot = (await W(() => window.__world.paintingSlots))[1];
+  const pt = await W((i) => window.__world.paintingScreenPoint(i), slot);
+  await page.mouse.click(pt.x, pt.y);
+  await page.waitForSelector('[data-testid="picture-choose"]');
+  assert.equal(await page.textContent('[data-testid="picture-name"]'), "Đêm đầy sao");
+  assert.equal(await W((i) => window.__world.pictureState(i), slot), "original");
+  const png = testPng();
+  await page.setInputFiles('[data-testid="picture-input"]', { name: "anh-may-bay.png", mimeType: "image/png", buffer: png });
+  await page.waitForFunction((i) => window.__world.pictureState(i) === "custom", slot);
+  assert.equal(await page.textContent('[data-testid="picture-name"]'), "Ảnh của bạn");
+  const kept = await W(async (i) => { const b = await window.__app.meta.getSetting(`picture:${i}`, null); const bmp = await createImageBitmap(b); return { size: b.size, type: b.type, w: bmp.width, h: bmp.height }; }, slot);
+  assert.equal(kept.type, "image/jpeg");
+  assert.ok(kept.w === 1600 && kept.h === 1067, `shrunk to 1600 px (${kept.w}×${kept.h})`);
+  assert.ok(kept.size < png.length, `smaller than the original (${kept.size} vs ${png.length})`);
+  await page.waitForFunction(() => window.__world.idle);
+  await page.waitForTimeout(300);
+  await shot("58-own-picture");
+  // still there after a restart
+  await page.reload();
+  await page.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
+  assert.equal(await W((i) => window.__world.pictureState(i), slot), "custom");
+  // back to the painting
+  await page.waitForFunction(() => window.__world.idle);
+  const pt2 = await W((i) => window.__world.paintingScreenPoint(i), slot);
+  await page.mouse.click(pt2.x, pt2.y);
+  await page.click('[data-testid="picture-reset"]');
+  await page.waitForFunction((i) => window.__world.pictureState(i) === "original", slot);
+  assert.equal(await W((i) => window.__app.meta.getSetting(`picture:${i}`, null), slot), null);
+  await page.click('[data-testid="picture-close"]');
+});
+
+test("v1.5.1: a brass hairline under the title shows where you are in the book", async () => {
+  await W(async () => window.__app.open((await window.__app.library.list()).find((b) => b.title.includes("650"))));
+  await page.waitForSelector('[data-testid="scroller"]');
+  await page.click('[data-testid="page-input"]');
+  await page.keyboard.type("325");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => parseFloat(document.querySelector('[data-testid="read-progress"]').style.width) > 49 && parseFloat(document.querySelector('[data-testid="read-progress"]').style.width) < 51);
+  await backToShelf3d();
 });
 
 test("v1.4: first visit: a short tour walks through the room once, and can be replayed", async () => {

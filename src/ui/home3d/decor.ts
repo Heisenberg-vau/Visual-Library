@@ -222,6 +222,7 @@ export function framedPainting(kind: PaintingKind, seed: number, w: number, h: n
   const g = new THREE.Group();
   const canvasMesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: paintingTexture(kind, seed), roughness: 0.75 }));
   canvasMesh.position.z = 0.02;
+  canvasMesh.name = "canvas";
   g.add(canvasMesh);
   const f = 0.09;
   const bars: [number, number, number, number][] = [
@@ -506,4 +507,24 @@ export function globe(wood: THREE.Material, brass: THREE.Material): THREE.Group 
     if ((o as THREE.Mesh).isMesh) o.castShadow = o.receiveShadow = true;
   });
   return g;
+}
+
+/** The user's own picture, cropped to fill the frame (no stretching), with a faint varnish. */
+export function pictureTexture(img: ImageBitmap, aspect: number): THREE.CanvasTexture {
+  const W = 1024;
+  const H = Math.round(W / aspect);
+  const [c, ctx] = canvas(W, H);
+  const s = Math.max(W / img.width, H / img.height);
+  const dw = img.width * s;
+  const dh = img.height * s;
+  ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+  g.addColorStop(0, "rgba(255,240,210,0)");
+  g.addColorStop(1, "rgba(60,40,20,0.22)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
 }

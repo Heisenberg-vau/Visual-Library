@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { CELLS_PER_ATLAS, StackChunk, hash, type ShelfBook } from "./stacks";
-import { bustOnColumn, framedPainting, globe, plant, urnOnPedestal, type PaintingKind } from "./decor";
+import { bustOnColumn, framedPainting, globe, pictureTexture, plant, urnOnPedestal, type PaintingKind } from "./decor";
 import { boardNoteTexture, corkTexture, dustTexture, floorTexture, pagesTexture, type NoteLine, plaqueTexture, plasterTexture, slipTexture, spineTexture, woodTexture, type SpineStyle } from "./textures";
 
 /*
@@ -61,6 +61,8 @@ export interface WorldEvents {
   onDeskBook?: (id: string) => void;
   /** Tapped a note on the pinboard. */
   onNote?: (key: NoteKey) => void;
+  /** Tapped a painting on the back wall (in the hall). */
+  onPainting?: (index: number) => void;
 }
 
 interface Placed {
@@ -119,6 +121,9 @@ export class LibraryWorld {
   private resizeObs: ResizeObserver;
   private roomRight = 8;
   private roomGroup = new THREE.Group();
+  /** Paintings on the back wall: their canvas, the original texture, the user's picture if any. */
+  private frames: { mesh: THREE.Mesh; original: THREE.Texture; aspect: number }[] = [];
+  private pictures = new Map<number, ImageBitmap>();
   spineStyle: SpineStyle;
 
   constructor(
@@ -458,6 +463,52 @@ export class LibraryWorld {
     };
   }
 
+  /** Number of frames on the wall (some hide in a small room). */
+  get paintingSlots(): number[] {
+    return this.frames.map((f, i) => (f ? i : -1)).filter((i) => i >= 0);
+  }
+
+  /** Puts the user's picture in a frame (null: back to the original painting). */
+  setPicture(i: number, img: ImageBitmap | null): void {
+    const old = this.pictures.get(i);
+    if (old && old !== img) old.close();
+    if (img) this.pictures.set(i, img);
+    else this.pictures.delete(i);
+    const f = this.frames[i];
+    if (!f) return;
+    const mat = f.mesh.material as THREE.MeshStandardMaterial;
+    if (img) this.applyPicture(i, img);
+    else if (mat.map !== f.original) {
+      mat.map?.dispose();
+      mat.map = f.original;
+      mat.needsUpdate = true;
+    }
+    this.kick();
+  }
+
+  private applyPicture(i: number, img: ImageBitmap): void {
+    const f = this.frames[i];
+    const mat = f.mesh.material as THREE.MeshStandardMaterial;
+    if (mat.map && mat.map !== f.original) mat.map.dispose();
+    mat.map = pictureTexture(img, f.aspect);
+    mat.needsUpdate = true;
+  }
+
+  /** "custom" or "original" (tests). */
+  pictureState(i: number): string {
+    const f = this.frames[i];
+    return f && (f.mesh.material as THREE.MeshStandardMaterial).map !== f.original ? "custom" : "original";
+  }
+
+  /** Screen position of a painting's centre (tests). */
+  paintingScreenPoint(i: number): { x: number; y: number } | null {
+    const f = this.frames[i];
+    if (!f) return null;
+    const v = f.mesh.getWorldPosition(new THREE.Vector3()).project(this.camera);
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+  }
+
   /** What a tap at a client point would hit (diagnostics). */
   probe(x: number, y: number): string[] {
     const r = this.renderer.domElement.getBoundingClientRect();
@@ -567,11 +618,18 @@ export class LibraryWorld {
       ["sailboat", 4.1, 1.4, 1.05],
       ["poppies", 6.9, 1.4, 1.05],
     ];
+    this.frames = [];
     paintings.forEach(([kind, x, w, h], i) => {
       if (x > R - 1.2) return;
       const p = framedPainting(kind, 100 + i * 17, w, h, gold);
       p.position.set(x, 2.35, -7.98);
+      p.userData.painting = i;
       g.add(p);
+      const mesh = p.getObjectByName("canvas") as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      this.frames[i] = { mesh, original: mat.map!, aspect: w / h };
+      const pic = this.pictures.get(i);
+      if (pic) this.applyPicture(i, pic);
     });
     const plants: ["fig" | "palm", number][] = [["fig", -6.2], ["palm", 0.0], ["fig", 5.5]];
     plants.forEach(([kind, x], i) => {
@@ -1031,6 +1089,11 @@ export class LibraryWorld {
         if (onDesk && this.view.kind === "desk") this.events.onDeskBook?.(placed.data.id);
         else if (onDesk && this.view.kind === "hall") this.goTo({ kind: "desk" });
         return; // the pulled-out book itself
+      }
+      if (this.view.kind === "hall") {
+        let q: THREE.Object3D | null = h.object;
+        while (q && q.userData.painting == null) q = q.parent;
+        if (q) return this.events.onPainting?.(q.userData.painting as number);
       }
       while (o && !o.userData.zone) o = o.parent;
       const zone = o?.userData.zone as string | undefined;

@@ -110,6 +110,8 @@ export class ReaderView {
   private activeScroller: PageScroller;
   private unsubGrow: (() => void) | null = null;
   private totalLabel: HTMLElement;
+  /** Brass hairline under the running head: where you are in the book. */
+  private progressLine: HTMLElement;
   private readonly isNotebook: boolean;
   private chips: { el: HTMLButtonElement; dispose: () => void }[] = [];
   private focusOn = false;
@@ -361,10 +363,12 @@ export class ReaderView {
         h("div", { class: "reader-title", title: book.title }, book.title),
         h("span", { class: "rh-orn", "aria-hidden": "true" }, "❦"),
         h("span", { class: "rh-rule" }),
+        (this.progressLine = h("i", { class: "rh-progress", "data-testid": "read-progress", "aria-hidden": "true" })),
       ),
       h("div", { class: "reader-body" }, this.sidebar, this.main),
       this.pill,
     );
+    this.setProgressLine(Math.min(book.lastPage, doc.numPages));
     window.addEventListener("popstate", this.onPopState);
     document.addEventListener("fullscreenchange", this.onFullscreenChange);
     this.el.addEventListener("keydown", this.onKey);
@@ -873,7 +877,15 @@ export class ReaderView {
     if (document.activeElement !== this.pageInput) this.pageInput.value = String(p);
     if (this.focusOn) this.updatePill();
     this.thumbs.setCurrent(p);
+    this.setProgressLine(p);
     this.queueSave();
+  }
+
+  private setProgressLine(p: number): void {
+    const n = this.deps.doc.numPages;
+    const f = n > 1 ? (p - 1) / (n - 1) : 1;
+    this.progressLine.style.width = `${(Math.max(0, Math.min(1, f)) * 100).toFixed(2)}%`;
+    this.progressLine.title = `Trang ${p}/${n}`;
   }
 
   private updateZoomLabel(): void {

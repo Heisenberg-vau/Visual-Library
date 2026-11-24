@@ -1010,3 +1010,8 @@ svg.ic { stroke-width: 1.65; }
 @media (prefers-reduced-motion: reduce) { .reader { animation: none; } }
 .reader.focus .focus-pill { opacity: 0.95; }
 .reader.focus .pill-page { color: var(--wood-ink); font-variant-numeric: tabular-nums; }
+.reader-head { position: relative; }
+.rh-progress { position: absolute; left: 0; bottom: -1px; height: 2px; width: 0; pointer-events: none;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 55%, transparent), #e2c27a); box-shadow: 0 0 6px rgb(226 194 122 / 0.45);
+  transition: width 0.35s ease-out; }
+@media (prefers-reduced-motion: reduce) { .rh-progress { transition: none; } }

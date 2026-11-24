@@ -29,7 +29,12 @@ export interface HomeDeps {
   putTask: (t: Task) => Promise<void>;
   /** The planner's task dialog (create when t = null). True if saved. */
   editTask: (t: Task | null, date?: string | null, kind?: Task["kind"]) => Promise<boolean>;
+  /** The user's own pictures in the frames on the wall (index → image). */
+  loadPictures: () => Promise<Map<number, Blob>>;
+  savePicture: (index: number, picture: Blob | null) => Promise<void>;
 }
+
+const PAINTING_NAMES = ["Hoàng hôn trên biển", "Đêm đầy sao", "Cối xay gió", "Thuyền buồm", "Đồng hoa anh túc"];
 
 const VIEW_KEY = "vl.view";
 const SPINE_KEY = "vl.spine";
@@ -54,6 +59,10 @@ export class HomeView {
   /** Bottom strip: shortcuts in the hall, previous/next stack in an aisle. */
   private strip: HTMLElement;
   private tourCard: HTMLElement | null = null;
+  private picturesLoaded = false;
+  private customPictures = new Set<number>();
+  private pictureInput: HTMLInputElement;
+  private pictureSlot = -1;
 
   /** WebGL may be unavailable (very old devices): then the list view is used. */
   static supported(): boolean {
@@ -72,6 +81,12 @@ export class HomeView {
       const files = [...(this.fileInput.files ?? [])];
       this.fileInput.value = "";
       if (files.length) void this.importFiles(files);
+    });
+    this.pictureInput = h("input", { type: "file", accept: "image/*", hidden: true, "data-testid": "picture-input" }) as HTMLInputElement;
+    this.pictureInput.addEventListener("change", () => {
+      const f = this.pictureInput.files?.[0];
+      this.pictureInput.value = "";
+      if (f && this.pictureSlot >= 0) void this.usePicture(this.pictureSlot, f);
     });
     const btn = (label: string, testid: string, run: () => void, ic?: string) => {
       const b = h("button", { class: "h3-btn", type: "button", "data-testid": testid }, ic ? h("span", { html: icon(ic, 18) }) : null, label);
@@ -102,6 +117,7 @@ export class HomeView {
       btn("Danh sách", "h3-list", () => this.deps.onList(), "list"),
       more,
       this.fileInput,
+      this.pictureInput,
     );
     this.panel = h("aside", { class: "h3-panel", "data-testid": "h3-panel", hidden: true });
     this.strip = h("nav", { class: "h3-strip", "data-testid": "h3-strip", hidden: true });
@@ -126,6 +142,7 @@ export class HomeView {
           this.note = key;
           this.renderBoard();
         },
+        onPainting: (i) => this.renderPicturePanel(i),
       },
       this.spineStyle,
     );
@@ -157,6 +174,17 @@ export class HomeView {
       this.restoreView(saved);
     } else world.setDesk(this.deskEntries());
     await this.loadBoard();
+    if (!this.picturesLoaded) {
+      this.picturesLoaded = true;
+      for (const [i, blob] of await this.deps.loadPictures()) {
+        try {
+          world.setPicture(i, await createImageBitmap(blob));
+          this.customPictures.add(i);
+        } catch {
+          /* an unreadable picture: keep the painting */
+        }
+      }
+    }
     const v = world.currentView;
     if (v.kind === "desk") this.renderDesk();
     if (v.kind === "board") this.renderBoard();
@@ -324,6 +352,50 @@ export class HomeView {
         ...this.stacks.map((st, i) => go(chip(st.name, `${count(st)} cuốn`), `strip-stack-${i}`, { kind: "stack", index: i })),
       ),
     );
+  }
+
+  // ------------------------------------------------------------ your own pictures in the frames
+
+  private renderPicturePanel(i: number): void {
+    if (this.tourCard) return;
+    this.pictureSlot = i;
+    const custom = this.customPictures.has(i);
+    const choose = h("button", { class: "h3-primary", type: "button", "data-testid": "picture-choose" }, custom ? "Đổi ảnh…" : "Chọn ảnh của bạn…");
+    choose.addEventListener("click", () => this.pictureInput.click());
+    const reset = custom ? h("button", { class: "h3-ghost", type: "button", "data-testid": "picture-reset" }, "Treo lại tranh gốc") : null;
+    reset?.addEventListener("click", () => void this.usePicture(i, null));
+    const close = h("button", { class: "h3-ghost", type: "button", "data-testid": "picture-close" }, "Đóng");
+    close.addEventListener("click", () => (this.panel.hidden = true));
+    this.panel.hidden = false;
+    this.panel.replaceChildren(
+      h("div", { class: "h3-k" }, "TRANH TRÊN TƯỜNG"),
+      h("div", { class: "h3-t", "data-testid": "picture-name" }, custom ? "Ảnh của bạn" : PAINTING_NAMES[i] ?? "Tranh"),
+      h("p", { class: "h3-muted" }, custom ? `Thay cho “${PAINTING_NAMES[i]}”. Ảnh chỉ nằm trên máy này.` : "Đặt một bức ảnh của bạn vào khung này. Ảnh được thu nhỏ vừa khung và chỉ lưu trên máy này."),
+      h("div", { class: "h3-row" }, choose, reset, close),
+    );
+  }
+
+  /** Shrinks the picture (≤ 1600 px, JPEG) before keeping it: the frame never needs more. */
+  private async usePicture(i: number, file: Blob | null): Promise<void> {
+    const world = this.world;
+    if (!world) return;
+    try {
+      if (!file) {
+        await this.deps.savePicture(i, null);
+        world.setPicture(i, null);
+        this.customPictures.delete(i);
+        toast("Đã treo lại tranh gốc.");
+      } else {
+        const blob = await shrinkPicture(file, 1600);
+        await this.deps.savePicture(i, blob);
+        world.setPicture(i, await createImageBitmap(blob));
+        this.customPictures.add(i);
+        toast("Đã treo ảnh của bạn lên tường.");
+      }
+    } catch {
+      toast("Không đọc được ảnh này. Hãy thử ảnh JPG hoặc PNG khác.", "error");
+    }
+    if (this.world?.currentView.kind === "hall") this.renderPicturePanel(i);
   }
 
   // ------------------------------------------------------------ first-visit tour
@@ -702,4 +774,18 @@ export function leatherFrom(px: Uint8ClampedArray, id: string): string {
   const light = 0.2 + (s % 10) / 100; // 20–29%
   const hh = d < 0.08 ? [8, 150, 25, 210, 340][s % 5] : hue; // grey covers: pick a classic leather hue
   return `hsl(${Math.round(hh)}, ${Math.round(sat * 100)}%, ${Math.round(light * 100)}%)`;
+}
+
+/** Longest side ≤ max px, re-encoded as JPEG (photos from a tablet camera are often 4000+ px). */
+async function shrinkPicture(file: Blob, max: number): Promise<Blob> {
+  const img = await createImageBitmap(file);
+  const s = Math.min(1, max / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * s));
+  const h2 = Math.max(1, Math.round(img.height * s));
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h2;
+  c.getContext("2d")!.drawImage(img, 0, 0, w, h2);
+  img.close();
+  return new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error("encode"))), "image/jpeg", 0.85));
 }
