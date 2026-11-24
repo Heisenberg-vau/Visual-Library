@@ -33,6 +33,7 @@ export interface HomeDeps {
 
 const VIEW_KEY = "vl.view";
 const SPINE_KEY = "vl.spine";
+const TOUR_KEY = "vl.tour";
 
 export class HomeView {
   readonly el: HTMLElement;
@@ -50,6 +51,9 @@ export class HomeView {
   private desk: DeskItem[] = [];
   private sections: BoardSections | null = null;
   private note: NoteKey = "today";
+  /** Bottom strip: shortcuts in the hall, previous/next stack in an aisle. */
+  private strip: HTMLElement;
+  private tourCard: HTMLElement | null = null;
 
   /** WebGL may be unavailable (very old devices): then the list view is used. */
   static supported(): boolean {
@@ -78,6 +82,7 @@ export class HomeView {
     more.addEventListener("click", () =>
       popupMenu(more, [
         { label: "Danh sách & quản lý sách", run: () => this.deps.onList() },
+        { label: "Xem lại hướng dẫn", run: () => this.startTour() },
         {
           label: `Chữ trên gáy: ${this.spineStyle === "up" ? "từ dưới lên (nghiêng đầu sang trái)" : "từ trên xuống (nghiêng đầu sang phải)"} → đổi`,
           run: () => this.toggleSpine(),
@@ -99,7 +104,8 @@ export class HomeView {
       this.fileInput,
     );
     this.panel = h("aside", { class: "h3-panel", "data-testid": "h3-panel", hidden: true });
-    this.el = h("div", { class: "home3d", "data-testid": "home3d" }, this.bar, this.panel);
+    this.strip = h("nav", { class: "h3-strip", "data-testid": "h3-strip", hidden: true });
+    this.el = h("div", { class: "home3d", "data-testid": "home3d" }, this.bar, this.panel, this.strip);
   }
 
   private get spineStyle(): SpineStyle {
@@ -154,7 +160,9 @@ export class HomeView {
     const v = world.currentView;
     if (v.kind === "desk") this.renderDesk();
     if (v.kind === "board") this.renderBoard();
+    this.renderStrip();
     this.el.dataset.ready = "1";
+    if (!localStorage.getItem(TOUR_KEY) && !this.tourCard) this.startTour();
   }
 
   private deskEntries(): DeskEntry[] {
@@ -263,6 +271,120 @@ export class HomeView {
     if (v.kind === "desk") this.renderDesk();
     else if (v.kind === "board") this.renderBoard();
     else if (!this.world?.pulledBook) this.panel.hidden = true;
+    this.renderStrip();
+  }
+
+  // ------------------------------------------------------------ hall shortcuts & stack-to-stack
+
+  private renderStrip(): void {
+    const world = this.world;
+    const v = world?.currentView;
+    if (!world || !v || v.kind === "desk" || v.kind === "board" || this.tourCard) {
+      this.strip.hidden = true;
+      return;
+    }
+    const go = (label: string | HTMLElement[], testid: string, to: WorldView, cls = "") => {
+      const b = h("button", { class: `strip-chip ${cls}`, type: "button", "data-testid": testid }, ...(typeof label === "string" ? [label] : label));
+      b.addEventListener("click", () => world.goTo(to));
+      return b;
+    };
+    if (v.kind === "stack") {
+      const n = this.stacks.length;
+      const i = v.index;
+      const prev = go("‹", "h3-prev", { kind: "stack", index: i - 1 }, "strip-arrow");
+      const next = go("›", "h3-next", { kind: "stack", index: i + 1 }, "strip-arrow");
+      (prev as HTMLButtonElement).disabled = i <= 0;
+      (next as HTMLButtonElement).disabled = i >= n - 1;
+      prev.title = i > 0 ? `Sang tủ ${this.stacks[i - 1].name}` : "";
+      next.title = i < n - 1 ? `Sang tủ ${this.stacks[i + 1].name}` : "";
+      this.strip.className = "h3-strip aisle";
+      this.strip.hidden = false;
+      this.strip.replaceChildren(prev, h("span", { class: "strip-pos" }, "Tủ", h("br"), `${i + 1}/${n}`), next);
+      return;
+    }
+    // the hall: a greeting and one shortcut per zone
+    const s = this.sections;
+    const today = this.today();
+    const todo = s ? s.today.filter((t) => !t.done).length : 0;
+    const ev = s?.events[0];
+    const hour = new Date().getHours();
+    const hello = hour < 11 ? "Chào buổi sáng" : hour < 18 ? "Chào buổi chiều" : "Chào buổi tối";
+    const sub = [todo ? `hôm nay còn ${todo} việc` : "hôm nay chưa có việc nào", ev?.date ? `${ev.title} ${countdown(ev.date, today)}` : null].filter(Boolean).join(" · ");
+    const count = (st: WorldStack) => st.tiers.reduce((a, t) => a + t.books.length, 0);
+    const chip = (main: string, small: string) => [h("span", {}, main), h("small", {}, small)];
+    this.strip.className = "h3-strip hall";
+    this.strip.hidden = false;
+    this.strip.replaceChildren(
+      h("div", { class: "strip-hello", "data-testid": "strip-hello" }, h("b", {}, hello), h("span", {}, sub)),
+      h(
+        "div",
+        { class: "strip-row" },
+        go(chip("Bàn học", `${this.desk.length}/${DESK_MAX} cuốn`), "strip-desk", { kind: "desk" }),
+        go(chip("Bảng ghim", todo ? `${todo} việc hôm nay` : "kế hoạch"), "strip-board", { kind: "board" }),
+        ...this.stacks.map((st, i) => go(chip(st.name, `${count(st)} cuốn`), `strip-stack-${i}`, { kind: "stack", index: i })),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ first-visit tour
+
+  /** A short guided walk through the room; the camera goes to each zone. */
+  startTour(): void {
+    const world = this.world;
+    if (!world) return;
+    world.putBack();
+    const steps: { to: WorldView | null; title: string; text: string }[] = [
+      { to: { kind: "hall" }, title: "Chào mừng tới thư viện của bạn", text: "Đây là sảnh. Chạm vào một tủ sách, bàn học hay bảng ghim để đi tới đó; các lối tắt ở dưới cùng màn hình." },
+      {
+        to: this.stacks.length ? { kind: "stack", index: 0 } : null,
+        title: "Tủ sách",
+        text: "Mỗi danh mục là một tủ, mỗi tủ có 4 tầng cho danh mục con. Vuốt ngang để lướt kệ, chạm vào gáy sách để rút ra xem bìa. Nút ‹ › ở góc dưới để sang tủ bên cạnh.",
+      },
+      { to: { kind: "desk" }, title: "Bàn học", text: "Sách đang đọc nằm trên bàn (tối đa 6 cuốn), chạm vào là đọc tiếp. Cuốn nào lâu không mở sẽ phủ bụi để nhắc bạn cất lên kệ." },
+      { to: { kind: "board" }, title: "Bảng ghim", text: "Việc hôm nay, kế hoạch tuần, dự định và sự kiện sắp tới. Chạm vào tờ giấy để xem, tick xong hoặc ghim thêm." },
+      { to: { kind: "hall" }, title: "Sẵn sàng rồi", text: "Nút “Sảnh” luôn đưa bạn về đây, “Nhập sách” để thêm PDF hoặc Word. Muốn xem lại hướng dẫn này thì mở menu ⋮." },
+    ];
+    const live = steps.filter((st) => st.to);
+    let i = 0;
+    const card = h("div", { class: "tour-card", "data-testid": "tour", role: "dialog", "aria-label": "Hướng dẫn" });
+    this.tourCard = card;
+    this.el.classList.add("touring");
+    this.panel.hidden = true;
+    this.strip.hidden = true;
+    const finish = () => {
+      try {
+        localStorage.setItem(TOUR_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+      card.remove();
+      this.tourCard = null;
+      this.el.classList.remove("touring");
+      const v = world.currentView;
+      this.onView(v);
+    };
+    const show = () => {
+      const st = live[i];
+      world.goTo(st.to!);
+      this.panel.hidden = true;
+      const last = i === live.length - 1;
+      const next = h("button", { class: "h3-primary", type: "button", "data-testid": "tour-next" }, last ? "Bắt đầu" : "Tiếp");
+      next.addEventListener("click", () => {
+        if (last) return finish();
+        i++;
+        show();
+      });
+      const skip = h("button", { class: "h3-ghost", type: "button", "data-testid": "tour-skip" }, "Bỏ qua");
+      skip.addEventListener("click", finish);
+      card.replaceChildren(
+        h("div", { class: "tour-dots" }, ...live.map((_, k) => h("i", { class: k === i ? "on" : "" }))),
+        h("div", { class: "tour-title", "data-testid": "tour-title" }, st.title),
+        h("p", {}, st.text),
+        h("div", { class: "h3-row" }, last ? null : skip, next),
+      );
+    };
+    this.el.append(card);
+    show();
   }
 
   private savedView(): { kind: string; id?: string | null } | null {
@@ -290,6 +412,7 @@ export class HomeView {
   // ------------------------------------------------------------ pulled-out book
 
   private renderPanel(wb: WorldBook | null): void {
+    if (this.tourCard) return;
     if (!wb) {
       if (this.world?.currentView.kind !== "desk") this.panel.hidden = true;
       return;
@@ -361,7 +484,7 @@ export class HomeView {
   }
 
   private renderDesk(): void {
-    if (this.world?.currentView.kind !== "desk") return;
+    if (this.world?.currentView.kind !== "desk" || this.tourCard) return;
     const now = Date.now();
     const rows = this.desk.map((d) => {
       const b = this.books.get(d.id)!;
@@ -423,7 +546,7 @@ export class HomeView {
   }
 
   private renderBoard(): void {
-    if (this.world?.currentView.kind !== "board" || !this.sections) return;
+    if (this.world?.currentView.kind !== "board" || !this.sections || this.tourCard) return;
     const today = this.today();
     const s = this.sections;
     const names: Record<NoteKey, string> = { today: "Hôm nay", week: "Tuần này", goals: "Dự định", events: "Sự kiện" };

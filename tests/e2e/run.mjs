@@ -46,6 +46,8 @@ before(async () => {
   // The older tests drive the list view; the 3D room has its own tests below.
   await context.addInitScript(() => {
     if (!localStorage.getItem("vl.home")) localStorage.setItem("vl.home", "list");
+    // the first-visit tour has its own test (fresh context)
+    if (!localStorage.getItem("vl.tour")) localStorage.setItem("vl.tour", "1");
   });
   page = await context.newPage();
   page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
@@ -1301,6 +1303,85 @@ test("v1.3: the pinboard shows the plan; add, tick, goals and events from the ro
   await page.waitForFunction(() => window.__world.idle);
   await page.waitForTimeout(400);
   await shot("54-pinboard");
+});
+
+test("v1.4: hall shortcuts; walking between zones goes round the bookcases, never through", async () => {
+  await page.click('[data-testid="h3-hall"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="home3d"]').dataset.view === "hall" && window.__world.idle);
+  await page.waitForSelector('[data-testid="h3-strip"].hall:not([hidden])');
+  const n = await W(() => window.__world.stackCount());
+  assert.equal(await page.locator('[data-testid^="strip-stack-"]').count(), n, "one shortcut per stack");
+  assert.match(await page.textContent('[data-testid="strip-desk"]'), /Bàn học\s*\d\/6 cuốn/);
+  assert.match(await page.textContent('[data-testid="strip-hello"]'), /Chào buổi/);
+  await page.waitForTimeout(300);
+  await shot("55-hall-shortcuts");
+  // record the camera along each walk and check it never enters a bookcase
+  const walk = async (click) => {
+    await W(() => {
+      window.__track = [];
+      window.__tracking = true;
+      const loop = () => { window.__track.push(window.__world.layout().cam); if (window.__tracking) requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+    });
+    await click();
+    await page.waitForFunction(() => window.__world.idle && window.__track.length > 5, null, { timeout: 15000 });
+    const { stacks } = await W(() => window.__world.layout());
+    const track = await W(() => { window.__tracking = false; return window.__track; });
+    for (const [x, , z] of track)
+      for (const s of stacks) assert.ok(!(x > s.x0 - 0.05 && x < s.x1 + 0.05 && z > s.z0 && z < s.z1), `camera went through a bookcase at (${x.toFixed(2)}, ${z.toFixed(2)})`);
+  };
+  await walk(() => page.click('[data-testid="strip-stack-0"]'));
+  assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), "stack:0");
+  await page.waitForSelector('[data-testid="h3-strip"].aisle:not([hidden])');
+  assert.equal(await page.isDisabled('[data-testid="h3-prev"]'), true, "first stack: no previous");
+  if (n > 1) {
+    await walk(() => page.click('[data-testid="h3-next"]'));
+    assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), "stack:1");
+    assert.match(await page.textContent('[data-testid="h3-strip"]'), new RegExp(`Tủ\\s*2/${n}`));
+    await shot("56-aisle-nav");
+    await walk(() => page.click('[data-testid="h3-prev"]'));
+    assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), "stack:0");
+  }
+  await walk(() => page.click('[data-testid="h3-board"]'));
+  assert.ok(await page.isHidden('[data-testid="h3-strip"]'), "no shortcuts over the board panel");
+  await walk(() => page.click('[data-testid="h3-hall"]'));
+});
+
+test("v1.4: first visit: a short tour walks through the room once, and can be replayed", async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2, hasTouch: true, locale: "vi-VN" });
+  const p = await ctx.newPage();
+  p.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
+  await p.goto(URL);
+  await p.waitForSelector('[data-testid="tour"]', { timeout: 60000 });
+  const view = () => p.getAttribute('[data-testid="home3d"]', "data-view");
+  assert.equal(await p.textContent('[data-testid="tour-title"]'), "Chào mừng tới thư viện của bạn");
+  assert.equal(await view(), "hall");
+  assert.ok(await p.isHidden('[data-testid="h3-strip"]'));
+  await p.waitForFunction(() => window.__world.idle);
+  await p.waitForTimeout(300);
+  await p.screenshot({ path: `${SHOTS}/57-tour.png` });
+  const seen = [];
+  for (;;) {
+    seen.push(await view());
+    const last = (await p.textContent('[data-testid="tour-next"]')) === "Bắt đầu";
+    await p.click('[data-testid="tour-next"]');
+    if (last) break;
+    await p.waitForFunction(() => window.__world.idle, null, { timeout: 15000 });
+  }
+  assert.deepEqual(seen, ["hall", "stack:0", "desk", "board", "hall"]);
+  assert.ok(await p.isHidden('[data-testid="tour"]'));
+  await p.waitForSelector('[data-testid="h3-strip"].hall:not([hidden])');
+  // only once
+  await p.reload();
+  await p.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
+  assert.equal(await p.locator('[data-testid="tour"]').count(), 0);
+  // replay from the menu, then skip
+  await p.click('[data-testid="h3-more"]');
+  await p.click("text=Xem lại hướng dẫn");
+  await p.waitForSelector('[data-testid="tour"]');
+  await p.click('[data-testid="tour-skip"]');
+  assert.equal(await p.locator('[data-testid="tour"]').count(), 0);
+  await ctx.close();
 });
 
 test("v1.1: favourite from the pulled-out book; import lands on the stack you stand at", async () => {

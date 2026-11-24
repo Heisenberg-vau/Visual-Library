@@ -105,13 +105,15 @@ export class LibraryWorld {
   private dustTex: THREE.Texture | null = null;
   private view: WorldView = { kind: "hall" };
   private along = 0;
-  private anim: { from: Spot; to: Spot; t0: number; dur: number } | null = null;
+  private anim: { from: Spot; to: Spot; t0: number; dur: number; path: THREE.CatmullRomCurve3 | null } | null = null;
+  private reduceMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   private tweens: ((now: number) => boolean)[] = [];
   private running = false;
   private moving = false;
   private paused = false;
   private drag: { x: number; y: number; along: number; moved: boolean } | null = null;
   private ray = new THREE.Raycaster();
+  private tmpV = new THREE.Vector3();
   private dprIdle = Math.min(window.devicePixelRatio || 1, 2);
   private dprMoving = Math.min(this.dprIdle, 1.1);
   private resizeObs: ResizeObserver;
@@ -201,15 +203,21 @@ export class LibraryWorld {
     if (v.kind === "stack" && v.index !== (this.view.kind === "stack" ? this.view.index : -1)) this.along = 0;
     if (this.pulled && !(v.kind === "stack" && this.view.kind === "stack" && v.index === this.view.index)) this.putBack();
     const to = this.spotFor(v);
+    const prev = this.view;
     this.view = v;
-    if (instant) {
+    if (instant || this.reduceMotion) {
       this.camera.position.copy(to.pos);
       this.target.copy(to.look);
       this.camera.fov = to.fov;
       this.camera.updateProjectionMatrix();
       this.camera.lookAt(this.target);
     } else {
-      this.anim = { from: { pos: this.camera.position.clone(), look: this.target.clone(), fov: this.camera.fov }, to, t0: performance.now(), dur: 1250 };
+      const from = { pos: this.camera.position.clone(), look: this.target.clone(), fov: this.camera.fov };
+      const path = this.walkway(from.pos, prev, to.pos, v);
+      const len = path ? path.getLength() : from.pos.distanceTo(to.pos);
+      // walking pace: longer trips take longer, but never drag
+      const dur = THREE.MathUtils.clamp(650 + len * 170, 800, 1900);
+      this.anim = { from, to, t0: performance.now(), dur, path };
     }
     this.events.onView(v);
     this.kick();
@@ -439,6 +447,15 @@ export class LibraryWorld {
     this.renderer.info.reset();
     this.renderer.render(this.scene, this.camera);
     return { calls: this.renderer.info.render.calls, textures: this.renderer.info.memory.textures, books: this.placed.length };
+  }
+
+  /** Camera position and the stacks' footprints (tests: flights never cut through a bookcase). */
+  layout(): { cam: [number, number, number]; stacks: { x0: number; x1: number; z0: number; z1: number }[] } {
+    const c = this.camera.position;
+    return {
+      cam: [c.x, c.y, c.z],
+      stacks: this.stackInfo.map((s) => ({ x0: s.x - STACK_W / 2, x1: s.x + STACK_W / 2, z0: STACK_Z - s.L / 2, z1: STACK_Z + s.L / 2 })),
+    };
   }
 
   /** What a tap at a client point would hit (diagnostics). */
@@ -843,6 +860,29 @@ export class LibraryWorld {
     return { pos: new THREE.Vector3(cx, 2.35, -3.2 + dist + 2.2), look: new THREE.Vector3(cx, 1.0, -3.2), fov: 50 };
   }
 
+  /**
+   * Flights in and out of an aisle go through the walkway in front of the
+   * stacks (like walking), never through a bookcase.
+   */
+  private walkway(a: THREE.Vector3, va: WorldView, b: THREE.Vector3, vb: WorldView): THREE.CatmullRomCurve3 | null {
+    const inA = va.kind === "stack";
+    const inB = vb.kind === "stack";
+    if (!inA && !inB) return null;
+    if (inA && inB && va.index === vb.index) return null;
+    const front = this.frontZ();
+    const pts = [a.clone()];
+    if (inA) pts.push(new THREE.Vector3(a.x, 1.25, front));
+    if (inB) pts.push(new THREE.Vector3(b.x, 1.25, front));
+    pts.push(b.clone());
+    return new THREE.CatmullRomCurve3(pts, false, "centripetal");
+  }
+
+  private frontZ(): number {
+    let z = STACK_Z + 1.2;
+    for (const s of this.stackInfo) z = Math.max(z, STACK_Z + s.L / 2);
+    return z + 0.85;
+  }
+
   private focusOn(p: Placed): void {
     const s = this.stackInfo[p.stackIndex];
     const lim = this.alongLimit(s.L);
@@ -932,7 +972,7 @@ export class LibraryWorld {
     const q0 = o.quaternion.clone();
     const t0 = performance.now();
     this.tweens.push((now) => {
-      const k = Math.min(1, (now - t0) / dur);
+      const k = THREE.MathUtils.clamp((now - t0) / dur, 0, 1);
       const e = ease(k);
       o.position.lerpVectors(p0, pos, e);
       o.position.y += Math.sin(e * Math.PI) * 0.05;
@@ -1058,11 +1098,21 @@ export class LibraryWorld {
     let busy = false;
     if (this.anim) {
       const a = this.anim;
-      const k = Math.min(1, (now - a.t0) / a.dur);
+      // the frame's timestamp can be a little older than the flight's start
+      const k = THREE.MathUtils.clamp((now - a.t0) / a.dur, 0, 1);
       const e = ease(k);
-      this.camera.position.lerpVectors(a.from.pos, a.to.pos, e);
-      this.camera.position.y += Math.sin(e * Math.PI) * 0.35;
+      if (a.path) a.path.getPointAt(e, this.camera.position);
+      else {
+        this.camera.position.lerpVectors(a.from.pos, a.to.pos, e);
+        this.camera.position.y += Math.sin(e * Math.PI) * 0.35;
+      }
       this.target.lerpVectors(a.from.look, a.to.look, e);
+      if (a.path) {
+        // mid-walk, look where you are going
+        const ahead = a.path.getPointAt(THREE.MathUtils.clamp(e + 0.12, 0, 1), this.tmpV);
+        ahead.y -= 0.15;
+        this.target.lerp(ahead.add(ahead.clone().sub(this.camera.position).multiplyScalar(2)), Math.sin(e * Math.PI) * 0.6);
+      }
       this.camera.fov = THREE.MathUtils.lerp(a.from.fov, a.to.fov, e);
       this.camera.updateProjectionMatrix();
       if (k >= 1) this.anim = null;
