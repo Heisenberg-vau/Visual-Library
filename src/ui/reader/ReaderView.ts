@@ -110,6 +110,8 @@ export class ReaderView {
   private lastScrollTop = 0;
   /** After the edge is called back on purpose it stays a moment. */
   private edgePinnedUntil = 0;
+  private edgeZone!: HTMLElement;
+  private colObs: ResizeObserver | null = null;
   private gesture: { start: number; max: number; moved: boolean; x: number; y: number; long: number } | null = null;
   private main: HTMLElement;
   private divider: HTMLElement;
@@ -265,6 +267,10 @@ export class ReaderView {
       undo: () => this.undo(),
       redo: () => this.redo(),
       host: this.el,
+      onDock: () => requestAnimationFrame(() => {
+        this.syncEdge();
+        this.renderDockTile();
+      }),
     });
 
     // ---- the thin top edge: back, title, timer when running, page, drawer
@@ -289,6 +295,7 @@ export class ReaderView {
       (this.progressLine = h("i", { class: "rh-progress", "data-testid": "read-progress", "aria-hidden": "true" })),
     );
     const edgeZone = h("div", { class: "edge-zone", "aria-hidden": "true" });
+    this.edgeZone = edgeZone;
     edgeZone.addEventListener("pointerdown", () => this.revealChrome());
 
     // ---- the drawer: everything else, grouped, with a command filter
@@ -302,6 +309,9 @@ export class ReaderView {
     this.divider.addEventListener("pointerdown", this.onDividerDown);
     this.main = h("div", { class: "reader-main" }, this.scroller.el);
     this.wireGestures();
+    // the top edge belongs to the book's column (the notebook has its own header)
+    this.colObs = new ResizeObserver(() => this.syncEdge());
+    this.colObs.observe(this.scroller.el);
 
     this.el.append(
       h("div", { class: "reader-body" }, this.sidebar, this.main),
@@ -331,6 +341,18 @@ export class ReaderView {
   showEdge(on: boolean): void {
     if (!on && (this.drawer?.classList.contains("open") || this.panelOpen || document.activeElement === this.pageInput)) return;
     this.edge?.classList.toggle("away", !on);
+  }
+
+  /** Keep the top edge over the book column only (beside the notebook and the pen rail). */
+  private syncEdge(): void {
+    if (!this.el.isConnected) return;
+    const r = this.el.getBoundingClientRect();
+    const c = this.scroller.el.getBoundingClientRect();
+    if (!c.width) return;
+    for (const e of [this.edge, this.edgeZone]) {
+      e.style.left = `${Math.max(0, c.left - r.left)}px`;
+      e.style.right = `${Math.max(0, r.right - c.right)}px`;
+    }
   }
 
   /** For tests and the keyboard: bring the top edge back. */
@@ -412,7 +434,6 @@ export class ReaderView {
     const theme = tile("theme-btn", "sun", "Giấy da / Ánh nến", "giao dien sang toi dem anh nen giay da theme", () => applyTheme(currentTheme() === "night" ? "day" : "night"));
     this.dockTile = tile("dock-btn", "hand", "", "hop but tay thuan trai phai canh", () => {
       this.pencase.setDock(this.pencase.dock === "right" ? "left" : "right");
-      this.renderDockTile();
     });
     this.renderDockTile();
     this.renderFocusTile();
@@ -919,6 +940,7 @@ export class ReaderView {
   /** Call after the element is in the document. */
   start(): void {
     this.scroller.start();
+    this.syncEdge();
     this.updateBookmarkBtn();
     this.armDwell(this.scroller.currentPage);
     // This book jumps the background indexing/OCR queue, nearest pages first.
@@ -1101,6 +1123,7 @@ export class ReaderView {
     clearTimeout(this.saveTimer);
     clearTimeout(this.dwellTimer);
     clearTimeout(this.hudTimer);
+    this.colObs?.disconnect();
     this.deps.index.focus(null);
     this.searchPanel?.destroy();
     this.clipCard?.close();

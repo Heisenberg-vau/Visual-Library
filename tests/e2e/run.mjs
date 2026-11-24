@@ -1465,6 +1465,42 @@ function testPng(w = 2400, h = 1600) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
 
+test("v1.6.1: every stack is seen from a clear aisle; leaving one turns the view one way only", async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+  await ctx.addInitScript(() => localStorage.setItem("vl.tour", "1"));
+  const p = await ctx.newPage();
+  await p.goto(URL);
+  await p.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
+  await p.evaluate(async () => { for (const n of ["Hàng không", "Tiếng Trung", "Trading", "Tâm lý học"]) await window.__app.library.createCategory(n, null); });
+  await p.reload();
+  await p.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
+  const n = await p.evaluate(() => window.__world.stackCount());
+  assert.ok(n >= 4);
+  for (let i = 0; i < n; i++) {
+    const { cam, stacks } = await p.evaluate((k) => { window.__world.goTo({ kind: "stack", index: k }, true); return window.__world.layout(); }, i);
+    // the camera stands in front of stack i's books, never behind the stack before it
+    assert.ok(cam[0] < stacks[i].x0, "in front of its own stack");
+    if (i > 0) assert.ok(cam[0] > stacks[i - 1].x1 + 0.1, `stack ${i + 1}: the aisle is clear of stack ${i} (camera x ${cam[0].toFixed(2)}, stack ${i} ends ${stacks[i - 1].x1.toFixed(2)})`);
+  }
+  // back to the hall from the last stack: record the heading, it must turn one way only
+  await p.evaluate(() => {
+    window.__yaw = [];
+    window.__on = true;
+    const loop = () => { const { cam, look } = window.__world.layout(); window.__yaw.push(Math.atan2(look[0] - cam[0], -(look[2] - cam[2]))); if (window.__on) requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+    window.__world.goTo({ kind: "hall" });
+  });
+  await p.waitForFunction(() => window.__world.idle && window.__yaw.length > 10, null, { timeout: 15000 });
+  const yaw = await p.evaluate(() => { window.__on = false; return window.__yaw; });
+  let pos = 0, neg = 0;
+  for (let k = 1; k < yaw.length; k++) { const d = yaw[k] - yaw[k - 1]; if (d > 0) pos += d; else neg -= d; }
+  assert.ok(Math.min(pos, neg) < 0.15, `turns one way (right ${pos.toFixed(2)} rad, left ${neg.toFixed(2)} rad)`);
+  await p.evaluate(() => window.__world.goTo({ kind: "stack", index: 1 }, true));
+  await p.waitForTimeout(300);
+  await p.screenshot({ path: `${SHOTS}/62-stack-2.png` });
+  await ctx.close();
+});
+
 test("v1.5.1: your own picture in a frame on the wall; kept small; back to the painting", async () => {
   await page.click('[data-testid="h3-hall"]');
   await page.waitForFunction(() => document.querySelector('[data-testid="home3d"]').dataset.view === "hall" && window.__world.idle);

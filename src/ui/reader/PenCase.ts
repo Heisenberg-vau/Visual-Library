@@ -57,6 +57,8 @@ export interface PenCaseDeps {
   redo: () => void;
   /** The element that carries data-dock (the reader). */
   host: HTMLElement;
+  /** The case moved to the other edge. */
+  onDock?: () => void;
 }
 
 export class PenCase {
@@ -126,7 +128,10 @@ export class PenCase {
     } catch {
       /* ignore */
     }
-    this.d.host.dataset.dock = side;
+    if (this.d.host.dataset.dock !== side) {
+      this.d.host.dataset.dock = side;
+      this.d.onDock?.();
+    }
   }
 
   get isOpen(): boolean {

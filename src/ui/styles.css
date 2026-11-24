@@ -1153,3 +1153,35 @@ svg.ic { stroke-width: 1.65; }
 .reader[data-dock="left"] .reader-main { margin-left: 62px; }
 .reader[data-dock="left"] .sidebar ~ .reader-main { margin-left: 62px; }
 .edge-title .reader-title { flex: 0 1 auto; min-width: 0; }
+
+/* v1.6.1 — tighter layout: columns, not gaps */
+.reader .nb-pane { padding-top: 0; }
+.reader .sidebar { padding-top: 0; }
+/* the pen case is a full-height rail on its edge: a column of its own */
+.pencase { top: 0; bottom: 0; transform: none; width: 62px; justify-content: center; border-top: 0; border-bottom: 0; box-sizing: border-box;
+  background: linear-gradient(90deg, var(--wood), var(--wood-2)); }
+.reader[data-dock="right"] .pencase { border-radius: 0; border-right: 0; border-left: 1px solid color-mix(in srgb, var(--gold) 45%, transparent); box-shadow: -6px 0 18px rgb(0 0 0 / 0.3); }
+.reader[data-dock="left"] .pencase { border-radius: 0; border-left: 0; border-right: 1px solid color-mix(in srgb, var(--gold) 45%, transparent); box-shadow: 6px 0 18px rgb(0 0 0 / 0.3); }
+.pencase.drawing { opacity: 1; }
+.pencase.drawing > * { opacity: 0.45; transition: opacity 0.25s; }
+.pc-grip { margin-bottom: 8px; }
+/* the split handle: a touch larger and lit while held, no more */
+.split-divider span { width: 5px; height: 48px; }
+.split-divider.dragging span { width: 7px; height: 58px; background: linear-gradient(180deg, #f0d48c, #e2c27a);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3), 0 0 10px rgb(226 194 122 / 0.6); }
+@media (orientation: portrait) {
+  .split-divider span { width: 48px; height: 5px; }
+  .split-divider.dragging span { width: 58px; height: 7px; }
+}
+/* the notebook's header: crisp words */
+.nb-header { height: 46px; }
+.nb-title { font-size: 19px; font-weight: 700; color: #2a1f16; }
+.nb-page, .nb-header .nb-link, .nb-header button { color: #2a1f16; font-weight: 600; }
+.nb-page { font-size: 15px; }
+:root[data-theme="night"] .nb-header { background: #2b2118; border-bottom-color: rgb(184 144 63 / 0.45); }
+:root[data-theme="night"] .reader.nb-active .nb-header, :root[data-theme="night"] .nb-header { color: #f3e6c8; }
+:root[data-theme="night"] .nb-title { color: #f0d48c; }
+:root[data-theme="night"] .nb-icon { color: #e2c27a; }
+:root[data-theme="night"] .nb-page, :root[data-theme="night"] .nb-header .nb-link, :root[data-theme="night"] .nb-header button { color: #f3e6c8; }
+:root[data-theme="night"] .reader.nb-active .nb-header { background: #33271b; box-shadow: inset 0 -2px 0 var(--accent); }
+.nb-header, .nb-header * { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }

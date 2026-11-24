@@ -85,7 +85,8 @@ interface Spot {
 const SHELF_GAP = 0.42;
 const STACK_W = 0.66;
 const STACK_Z = -3.6;
-const STACK_DX = 1.6;
+/** Stack spacing: the aisle must hold the camera (1.75 m from the books) clear of the stack behind it. */
+const STACK_DX = 2.6;
 const STACK_X0 = 1.5;
 const BOOK_D = 0.2;
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -455,10 +456,12 @@ export class LibraryWorld {
   }
 
   /** Camera position and the stacks' footprints (tests: flights never cut through a bookcase). */
-  layout(): { cam: [number, number, number]; stacks: { x0: number; x1: number; z0: number; z1: number }[] } {
+  layout(): { cam: [number, number, number]; look: [number, number, number]; stacks: { x0: number; x1: number; z0: number; z1: number }[] } {
     const c = this.camera.position;
+    const t = this.target;
     return {
       cam: [c.x, c.y, c.z],
+      look: [t.x, t.y, t.z],
       stacks: this.stackInfo.map((s) => ({ x0: s.x - STACK_W / 2, x1: s.x + STACK_W / 2, z0: STACK_Z - s.L / 2, z1: STACK_Z + s.L / 2 })),
     };
   }
@@ -651,7 +654,7 @@ export class LibraryWorld {
     gl.position.set(L + 1.0, 0, -1.3);
     g.add(palm2, gl);
     // pendant lamps
-    for (const [x, z] of [[-1.4, -2.9], [STACK_X0 + STACK_DX, -3.6]]) {
+    for (const [x, z] of [[-1.4, -2.9], [STACK_X0 + STACK_DX / 2, -3.6]]) {
       const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 1.2, 6), mat.walnutDark);
       cord.position.set(x, 3.6, z);
       const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.24, 0.18, 24, 1, true), mat.brass);
@@ -1171,10 +1174,15 @@ export class LibraryWorld {
       }
       this.target.lerpVectors(a.from.look, a.to.look, e);
       if (a.path) {
-        // mid-walk, look where you are going
+        // mid-walk, look where you are going, but only when that is roughly
+        // ahead of you: stepping back out of an aisle must not spin the view round
         const ahead = a.path.getPointAt(THREE.MathUtils.clamp(e + 0.12, 0, 1), this.tmpV);
         ahead.y -= 0.15;
-        this.target.lerp(ahead.add(ahead.clone().sub(this.camera.position).multiplyScalar(2)), Math.sin(e * Math.PI) * 0.6);
+        const go = ahead.clone().sub(this.camera.position).setY(0);
+        const view = this.target.clone().sub(this.camera.position).setY(0);
+        const facing = go.lengthSq() > 1e-6 && view.lengthSq() > 1e-6 ? go.normalize().dot(view.normalize()) : 0;
+        const w = Math.sin(e * Math.PI) * 0.6 * THREE.MathUtils.clamp(facing, 0, 1);
+        if (w > 0) this.target.lerp(ahead.add(ahead.clone().sub(this.camera.position).multiplyScalar(2)), w);
       }
       this.camera.fov = THREE.MathUtils.lerp(a.from.fov, a.to.fov, e);
       this.camera.updateProjectionMatrix();
