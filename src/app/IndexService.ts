@@ -13,7 +13,7 @@ import { TextIndexer } from "../ui/reader/TextIndexer";
 export class IndexService {
   private indexers = new Map<string, TextIndexer>();
   private queue: string[] = [];
-  private current: { id: string; ctrl: AbortController } | null = null;
+  private current: { id: string; ctrl: AbortController; done: Promise<void> } | null = null;
   private listeners = new Set<(bookId: string) => void>();
   private kicking = false;
   private pausedFlag = readPaused();
@@ -103,10 +103,18 @@ export class IndexService {
     });
   }
 
-  remove(bookId: string): void {
+  /**
+   * Stops indexing a book being deleted and WAITS for the page in progress to
+   * finish, so nothing of it is written after its text has been removed.
+   */
+  async remove(bookId: string): Promise<void> {
     this.queue = this.queue.filter((x) => x !== bookId);
-    if (this.current?.id === bookId) this.current.ctrl.abort();
     this.indexers.delete(bookId);
+    const cur = this.current;
+    if (cur?.id === bookId) {
+      cur.ctrl.abort();
+      await cur.done;
+    }
   }
 
   private kick(): void {
@@ -131,7 +139,8 @@ export class IndexService {
         continue;
       }
       const ctrl = new AbortController();
-      this.current = { id, ctrl };
+      let finished!: () => void;
+      this.current = { id, ctrl, done: new Promise<void>((r) => (finished = r)) };
       ix.queued = false;
       let doc: PagedDocument | null = null;
       try {
@@ -142,9 +151,11 @@ export class IndexService {
       } finally {
         await doc?.destroy().catch(() => {});
         this.current = null;
+        finished();
       }
+      if (!this.indexers.has(id)) continue; // removed meanwhile (deleted)
       if (ix.complete) await this.markDone(ix);
-      else if (this.indexers.has(id)) {
+      else {
         // Paused, or set aside for another book: continue later.
         if (!this.queue.includes(id)) this.queue.push(id);
         ix.queued = true;

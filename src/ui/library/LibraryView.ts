@@ -23,6 +23,8 @@ export interface LibraryViewDeps {
   saveView: (v: ShelfView) => void;
   study: StudySession;
   onPlanner: () => void;
+  /** Stage 3: the storage page. */
+  onStorage: () => void;
   loadTasks: () => Promise<Task[]>;
   loadReading: () => Promise<Map<string, BookReading>>;
   index: IndexService;
@@ -169,6 +171,7 @@ export class LibraryView {
         deps.study.chip().el,
         roomBtn,
         plannerBtn,
+        h("button", { class: "icon-btn", type: "button", "data-testid": "storage-btn", title: "Kho lưu trữ", "aria-label": "Kho lưu trữ", html: icon("inbox", 20), onclick: () => deps.onStorage() }),
         themeBtn,
         selectBtn,
         notebookBtn,

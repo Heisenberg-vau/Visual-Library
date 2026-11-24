@@ -25,6 +25,8 @@ import { dayKey } from "../core/study/dates";
 import type { DailyGoal } from "../ui/library/GoalRing";
 import { Ambience } from "../ui/study/Ambience";
 import { PlannerView } from "../ui/study/PlannerView";
+import { StorageView } from "../ui/storage/StorageView";
+import type { FileStore } from "../core/storage/FileStore";
 import { StudySession } from "../ui/study/StudySession";
 
 /** Composition root: builds the layers and switches between screens. */
@@ -78,15 +80,18 @@ export class App {
   readonly ambience: Ambience;
   readonly study: StudySession;
   private planner: PlannerView | null = null;
+  private storage: StorageView | null = null;
+  private readonly files: FileStore;
 
   constructor(private readonly root: HTMLElement) {
     const meta = new MetaStore();
     this.meta = meta;
-    this.library = new LibraryService(meta, createFileStore(), pdfInspector);
+    this.files = createFileStore();
+    this.library = new LibraryService(meta, this.files, pdfInspector);
     this.library.onDelete((id) => this.inkStore.deleteBook(id));
     this.library.onDelete((id) => this.readingStore.deleteBook(id));
     this.library.onDelete(async (id) => {
-      this.index.remove(id);
+      await this.index.remove(id); // waits for a page being indexed right now
       await this.textStore.deleteBook(id);
     });
     this.index = new IndexService(this.library, this.textStore, this.ocr, async (id) => openPdf(await this.library.readFile(id)));
@@ -115,6 +120,7 @@ export class App {
       saveView: (v) => void meta.setSetting("libraryView", v),
       study: this.study,
       onPlanner: () => void this.openPlanner(),
+      onStorage: () => void this.openStorage(),
       loadTasks: () => this.studyStore.listTasks(),
       loadReading: () => this.readingStore.all(),
       index: this.index,
@@ -132,6 +138,7 @@ export class App {
         onOpen: (b) => void this.open(b),
         onList: () => void this.setHomeMode("list"),
         onPlanner: () => void this.openPlanner(),
+        onStorage: () => void this.openStorage(),
         onFirstImport: () => void requestPersistentStorage(),
         loadDesk: () => this.loadDesk(),
         saveDesk: (d) => this.meta.setSetting("desk", d),
@@ -162,6 +169,7 @@ export class App {
     window.addEventListener("popstate", () => {
       if (this.reader && !location.hash.startsWith("#read/")) void this.closeReader(false);
       if (this.planner && location.hash !== "#plan") void this.closePlanner();
+      if (this.storage && location.hash !== "#storage") void this.closeStorage();
     });
   }
 
@@ -179,6 +187,9 @@ export class App {
     } else if (location.hash === "#plan") {
       history.replaceState(null, "", location.pathname + location.search);
       await this.openPlanner();
+    } else if (location.hash === "#storage") {
+      history.replaceState(null, "", location.pathname + location.search);
+      await this.openStorage();
     }
   }
 
@@ -303,6 +314,28 @@ export class App {
     this.root.replaceChildren(this.planner.el);
     await this.planner.refresh();
     (window as unknown as { __planner?: PlannerView }).__planner = this.planner;
+  }
+
+  /** Stage 3: what the library takes, its health, what this device can do. */
+  async openStorage(): Promise<void> {
+    if (this.storage) return;
+    if (this.reader) {
+      await this.closeReader(false, false);
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+    this.storage = new StorageView({ meta: this.meta, files: this.files, onBack: () => history.back() });
+    history.pushState({ storage: true }, "", "#storage");
+    this.home?.pause();
+    this.root.replaceChildren(this.storage.el);
+    (window as unknown as { __storage?: StorageView }).__storage = this.storage;
+    await this.storage.refresh();
+  }
+
+  private async closeStorage(): Promise<void> {
+    if (!this.storage) return;
+    this.storage.destroy();
+    this.storage = null;
+    await this.showHome();
   }
 
   private async closePlanner(): Promise<void> {

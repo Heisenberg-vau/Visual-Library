@@ -1204,3 +1204,33 @@ svg.ic { stroke-width: 1.65; }
 .home3d.touring .h3-bar .h3-more { visibility: hidden; }
 @media (max-width: 760px) { .h3-home .h3-title { display: none; } }
 .home3d { overflow: clip; }
+
+/* v2.0 — Kho lưu trữ */
+.st-main { display: grid; gap: 16px; max-width: 980px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+.st-card { background: var(--card); border-radius: 12px; padding: 16px 20px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 35%, transparent), 0 6px 18px rgb(42 27 16 / 0.12); }
+.st-card h2 { margin: 0 0 10px; font-size: 22px; }
+.st-card h3 { margin: 16px 0 8px; font-size: 17px; color: var(--accent); }
+.st-big { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+.st-big > div { background: var(--paper-2); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; }
+.st-big b { font-family: var(--font-display); font-size: 26px; }
+.st-big span { color: var(--ink-soft); font-size: 14px; }
+.st-ok { background: color-mix(in srgb, #2f7a3c 12%, var(--card)); border: 1px solid color-mix(in srgb, #2f7a3c 45%, transparent); border-radius: 10px; padding: 10px 12px; }
+.st-warn { background: color-mix(in srgb, #d08a1f 14%, var(--card)); border: 1px solid color-mix(in srgb, #d08a1f 55%, transparent); border-radius: 10px; padding: 10px 12px; }
+.st-warn p { margin: 0 0 8px; }
+.st-warn ul { margin: 0 0 6px; padding-left: 20px; }
+.st-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.st-table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.st-table td, .st-table th { padding: 6px 8px; border-bottom: 1px dashed var(--line); text-align: left; }
+.st-table th { font-size: 13px; color: var(--ink-soft); font-weight: 600; }
+.st-table td:not(:first-child), .st-table th:not(:first-child) { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.st-table tr.missing td { color: #b3261e; }
+.st-bad { color: #b3261e; }
+.st-scroll { max-height: 420px; overflow: auto; }
+.st-bars { display: grid; gap: 6px; }
+.st-bar { display: grid; grid-template-columns: minmax(120px, 220px) 1fr auto; gap: 10px; align-items: center; }
+.st-bar-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-bar-track { height: 10px; background: var(--paper-2); border-radius: 5px; overflow: hidden; }
+.st-bar-track i { display: block; height: 100%; background: linear-gradient(90deg, #a8792c, #e2c27a); }
+.st-bar-val { font-variant-numeric: tabular-nums; }
+.storage .small { font-size: 13.5px; }
+@media (max-width: 700px) { .st-big { grid-template-columns: 1fr; } }

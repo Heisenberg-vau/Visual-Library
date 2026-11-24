@@ -107,3 +107,39 @@ export async function tx<T>(
     t.onabort = () => reject(t.error ?? new Error("transaction aborted"));
   });
 }
+
+/**
+ * Read-modify-write of records in ONE transaction, so two writers close
+ * together can never overwrite each other with a stale copy. `fn` gets the
+ * current value (undefined if none) and returns the new one (undefined: leave
+ * it; null: delete it). Keys whose record is missing are passed undefined.
+ */
+export async function updateRecords<T>(
+  store: string,
+  keys: IDBValidKey[],
+  fn: (cur: T | undefined, key: IDBValidKey) => T | null | undefined,
+  outOfLineKeys = false,
+): Promise<Map<IDBValidKey, T>> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(store, "readwrite");
+    const s = t.objectStore(store);
+    const out = new Map<IDBValidKey, T>();
+    for (const key of keys) {
+      const r = s.get(key);
+      r.onsuccess = () => {
+        const next = fn(r.result as T | undefined, key);
+        if (next === undefined) return;
+        if (next === null) s.delete(key);
+        else {
+          if (outOfLineKeys) s.put(next, key);
+          else s.put(next);
+          out.set(key, next);
+        }
+      };
+    }
+    t.oncomplete = () => resolve(out);
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error ?? new Error("transaction aborted"));
+  });
+}

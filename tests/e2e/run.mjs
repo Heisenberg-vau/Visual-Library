@@ -1645,6 +1645,42 @@ test("v1.1: favourite from the pulled-out book; import lands on the stack you st
   assert.equal(await W(() => localStorage.getItem("vl.home")), "list");
 });
 
+test("v2.0: Kho lưu trữ: sizes, an integrity check that finds planted problems, a disk test, a restart marker", async () => {
+  const nBooks = await W(async () => (await window.__app.library.list()).length);
+  await W(() => window.__app.openStorage());
+  await page.waitForSelector('[data-testid="st-books"] tbody tr');
+  assert.equal(await page.locator('[data-testid="st-books"] tbody tr').count(), nBooks, "one row per book and notebook");
+  assert.match(await page.textContent('[data-testid="st-total"]'), /\d+(,\d)? (KB|MB|GB)/);
+  assert.ok(await page.isVisible('[data-testid="st-persisted"]'));
+  assert.match(await page.textContent('[data-testid="st-device-table"]'), /Trình duyệt/);
+  await shot("64-storage");
+  // plant a problem: notes that belong to no book, then check
+  await W(() => new Promise((res) => { const r = indexedDB.open("visual-library"); r.onsuccess = () => { const t = r.result.transaction("ink", "readwrite"); t.objectStore("ink").put({ key: "ghost-book:0", bookId: "ghost-book", page: 0, strokes: [{ tool: "pen", points: [1, 2, 3, 4] }] }); t.oncomplete = () => { r.result.close(); res(); }; }; }));
+  await page.click('[data-testid="st-check"]');
+  await page.waitForSelector('[data-testid="st-check-result"]', { timeout: 60000 });
+  assert.match(await page.textContent('[data-testid="st-check-result"]'), /Ghi chú, nét bút: 1 mục của sách đã xóa/);
+  // and nothing else: a book deleted while it was being indexed left no text behind (v2.0 fix)
+  assert.match(await page.textContent('[data-testid="st-check-result"]'), /Thấy 1 vấn đề/);
+  await page.click('[data-testid="st-check-deep"]');
+  await page.waitForFunction(() => /đã đọc lại|vấn đề/.test(document.querySelector('[data-testid="st-check-result"]')?.textContent ?? ""), null, { timeout: 120000 });
+  await shot("65-integrity");
+  // the disk test (smaller here): written, read back, every byte matches
+  await W(() => (window.__diskTestMB = 16));
+  await page.click('[data-testid="st-disktest"]');
+  await page.waitForFunction(() => /khớp từng byte|⚠/.test(document.querySelector('[data-testid="st-disk-result"]')?.textContent ?? ""), null, { timeout: 60000 });
+  assert.match(await page.textContent('[data-testid="st-disk-result"]'), /16 MB ghi rồi đọc lại khớp từng byte/);
+  // the restart marker survives a reload (here: the page; on the tablet: a restart)
+  await page.click('[data-testid="st-marker"]');
+  await page.waitForFunction(() => /vẫn còn nguyên/.test(document.querySelector('[data-testid="st-marker-state"]')?.textContent ?? ""));
+  await page.reload();
+  await page.waitForSelector('[data-testid="st-marker-state"]', { timeout: 60000 });
+  await page.waitForFunction(() => /vẫn còn nguyên/.test(document.querySelector('[data-testid="st-marker-state"]')?.textContent ?? ""));
+  // tidy the planted record so later tests see a clean library
+  await W(() => new Promise((res) => { const r = indexedDB.open("visual-library"); r.onsuccess = () => { const t = r.result.transaction("ink", "readwrite"); t.objectStore("ink").delete("ghost-book:0"); t.oncomplete = () => { r.result.close(); res(); }; }; }));
+  await page.click(".st-back");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="storage"]'));
+});
+
 test("works offline after the first visit", async () => {
   await page.waitForFunction(async () => (await navigator.serviceWorker?.getRegistration())?.active, null, { timeout: 20000 });
   await page.reload(); // let the service worker control the page

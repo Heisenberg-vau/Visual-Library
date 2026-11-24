@@ -295,16 +295,12 @@ export class LibraryService {
       ch.name = n;
       siblings.push(ch);
     }
-    const books = (await this.meta.list())
-      .filter((b) => b.categoryId === id)
-      .map((b) => ({ ...b, categoryId: c.parentId }));
-    await this.meta.deleteCategory(id, books, children);
+    const bookIds = (await this.meta.list()).filter((b) => b.categoryId === id).map((b) => b.id);
+    await this.meta.deleteCategory(id, bookIds, c.parentId, children);
   }
 
   async moveBooks(ids: string[], categoryId: string | null): Promise<void> {
-    const set = new Set(ids);
-    const books = (await this.meta.list()).filter((b) => set.has(b.id));
-    await this.meta.putMany(books.map((b) => ({ ...b, categoryId })));
+    await this.meta.updateMany(ids, () => ({ categoryId }));
   }
 
   // ---- tags ---------------------------------------------------------
@@ -314,23 +310,17 @@ export class LibraryService {
   }
 
   async addTags(ids: string[], tags: string[]): Promise<void> {
-    const set = new Set(ids);
-    const books = (await this.meta.list()).filter((b) => set.has(b.id));
-    await this.meta.putMany(books.map((b) => ({ ...b, tags: mergeTags(b.tags, tags) })));
+    await this.meta.updateMany(ids, (b) => ({ tags: mergeTags(b.tags, tags) }));
   }
 
   async removeTag(ids: string[], tag: string): Promise<void> {
-    const set = new Set(ids);
-    const books = (await this.meta.list()).filter((b) => set.has(b.id));
-    await this.meta.putMany(books.map((b) => ({ ...b, tags: b.tags.filter((t) => !sameTag(t, tag)) })));
+    await this.meta.updateMany(ids, (b) => ({ tags: b.tags.filter((t) => !sameTag(t, tag)) }));
   }
 
   /** Renames a tag on every book (merging if the new name already exists). */
   async renameTag(from: string, to: string): Promise<void> {
-    const books = (await this.meta.list()).filter((b) => b.tags.some((t) => sameTag(t, from)));
-    await this.meta.putMany(
-      books.map((b) => ({ ...b, tags: mergeTags(b.tags.filter((t) => !sameTag(t, from)), [to]) })),
-    );
+    const ids = (await this.meta.list()).filter((b) => b.tags.some((t) => sameTag(t, from))).map((b) => b.id);
+    await this.meta.updateMany(ids, (b) => (b.tags.some((t) => sameTag(t, from)) ? { tags: mergeTags(b.tags.filter((t) => !sameTag(t, from)), [to]) } : {}));
   }
 
   async setIndexDone(id: string, indexDone: boolean): Promise<void> {

@@ -21,6 +21,8 @@ export interface HomeDeps {
   onOpen: (b: BookMeta) => void;
   onList: () => void;
   onPlanner: () => void;
+  /** Stage 3: the storage page. */
+  onStorage: () => void;
   onFirstImport: () => void;
   loadDesk: () => Promise<DeskItem[]>;
   saveDesk: (items: DeskItem[]) => Promise<void>;
@@ -431,6 +433,7 @@ export class HomeView {
         "THƯ VIỆN",
         tile("h3-import", "plus", here ? `Nhập sách vào “${here}”` : "Nhập sách", () => this.fileInput.click()),
         tile("h3-list", "list", "Danh sách & quản lý", () => this.deps.onList()),
+        tile("room-storage", "inbox", "Kho lưu trữ", () => this.deps.onStorage()),
       ),
       group(
         "TUỲ CHỌN",

@@ -143,6 +143,27 @@ describe("LibraryService", () => {
     expect(b?.favorite).toBe(true);
   });
 
+  it("shelf and tag changes never drop a reading position saved at the same moment", async () => {
+    const [a, b] = await svc.importFiles([pdf("a.pdf", "%PDF-1.7 aaa"), pdf("b.pdf", "%PDF-1.7 bbbb")]);
+    if (a.status !== "added" || b.status !== "added") throw new Error("import");
+    const shelf = await svc.createCategory("Hàng không", null);
+    await Promise.all([
+      svc.moveBooks([a.book.id, b.book.id], shelf.id),
+      svc.savePosition(a.book.id, 42, 1),
+      svc.addTags([a.book.id, b.book.id], ["ATA"]),
+      svc.savePosition(b.book.id, 7, 1),
+    ]);
+    const [ra, rb] = await Promise.all([svc.get(a.book.id), svc.get(b.book.id)]);
+    expect([ra?.lastPage, rb?.lastPage]).toEqual([42, 7]);
+    expect([ra?.categoryId, rb?.categoryId]).toEqual([shelf.id, shelf.id]);
+    expect(ra?.tags).toEqual(["ATA"]);
+    // deleting the shelf moves the books up, keeping a position saved meanwhile
+    await Promise.all([svc.deleteCategory(shelf.id), svc.savePosition(a.book.id, 99, 1)]);
+    const ra2 = await svc.get(a.book.id);
+    expect(ra2?.lastPage).toBe(99);
+    expect(ra2?.categoryId).toBe(null);
+  });
+
   it("imports, stores the original and lists it", async () => {
     const [r] = await svc.importFiles([pdf("GAS_TURBINE_fundamental.pdf")]);
     expect(r.status).toBe("added");
@@ -197,5 +218,33 @@ describe("fileFingerprint", () => {
     const a2 = await fileFingerprint(new Blob([head + "AAA"]));
     expect(a).not.toBe(b);
     expect(a).toBe(a2);
+  });
+});
+
+describe("study and reading stores: concurrent writes", () => {
+  beforeEach(async () => {
+    await resetDbForTests();
+    await new Promise<void>((r) => {
+      const req = indexedDB.deleteDatabase("visual-library");
+      req.onsuccess = req.onerror = req.onblocked = () => r();
+    });
+  });
+
+  it("study time added from two places at once adds up", async () => {
+    const { StudyStore } = await import("../../src/core/study/StudyStore");
+    const st = new StudyStore();
+    await Promise.all([st.addTime("2026-11-24", 60_000, "b1"), st.addTime("2026-11-24", 30_000, "b1"), st.addTime("2026-11-24", 10_000, null)]);
+    const d = await st.getDay("2026-11-24");
+    expect(d.ms).toBe(100_000);
+    expect(d.books.b1).toBe(90_000);
+  });
+
+  it("pages counted as read close together are all kept", async () => {
+    const { ReadingStore } = await import("../../src/core/study/reading");
+    const rs = new ReadingStore();
+    await Promise.all([1, 2, 3, 4, 5].map((p) => rs.markRead("b1", p, "2026-11-24")));
+    const r = await rs.get("b1");
+    expect(r.count).toBe(5);
+    expect((await rs.getDay("2026-11-24")).keys.length).toBe(5);
   });
 });

@@ -10,6 +10,8 @@ export interface FileStore {
   /** Returns a File backed by disk (not loaded into RAM). */
   read(id: string): Promise<File>;
   delete(id: string): Promise<void>;
+  /** Names of every stored file (for integrity checks). */
+  list(): Promise<string[]>;
 }
 
 /** Origin Private File System: real files on disk, read lazily by slice. */
@@ -60,6 +62,13 @@ export class OpfsFileStore implements FileStore {
     const dir = await this.dir();
     await dir.removeEntry(id).catch(() => {});
   }
+
+  async list(): Promise<string[]> {
+    const dir = await this.dir();
+    const out: string[] = [];
+    for await (const name of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) out.push(name);
+    return out;
+  }
 }
 
 /** Fallback: Blob in IndexedDB (browsers still store it on disk). */
@@ -80,6 +89,10 @@ export class IdbFileStore implements FileStore {
   async delete(id: string): Promise<void> {
     await tx(STORES.blobs, "readwrite", (s) => s.delete(id));
   }
+
+  async list(): Promise<string[]> {
+    return (await tx<IDBValidKey[]>(STORES.blobs, "readonly", (s) => s.getAllKeys())).map(String);
+  }
 }
 
 /** In-memory store for unit tests. */
@@ -99,6 +112,10 @@ export class MemoryFileStore implements FileStore {
 
   async delete(id: string): Promise<void> {
     this.files.delete(id);
+  }
+
+  async list(): Promise<string[]> {
+    return [...this.files.keys()];
   }
 }
 

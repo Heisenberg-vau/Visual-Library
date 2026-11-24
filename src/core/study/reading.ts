@@ -1,4 +1,4 @@
-import { STORES, tx } from "../storage/idb";
+import { STORES, openDb, tx } from "../storage/idb";
 import type { DayKey } from "./dates";
 
 /**
@@ -75,19 +75,39 @@ export class ReadingStore {
     return new Map(rows.map((r) => [r.bookId, r]));
   }
 
-  /** Marks a page read for the book and for the day. */
+  /**
+   * Marks a page read for the book and for the day, in ONE transaction over
+   * both stores: two pages counted close together can never drop one.
+   */
   async markRead(bookId: string, page: number, day: DayKey): Promise<{ book: BookReading; todayCount: number }> {
-    const r = await this.get(bookId);
-    const { bits, added } = setBit(r.bits, page);
-    const book: BookReading = { bookId, bits, count: added ? r.count + 1 : r.count, updatedAt: Date.now() };
-    if (added) await tx(STORES.reading, "readwrite", (s) => s.put(book));
-    const d = await this.getDay(day);
-    const key = `${bookId}:${page}`;
-    if (!d.keys.includes(key)) {
-      d.keys.push(key);
-      await tx(STORES.readingDays, "readwrite", (s) => s.put(d));
-    }
-    return { book, todayCount: d.keys.length };
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction([STORES.reading, STORES.readingDays], "readwrite");
+      const rs = t.objectStore(STORES.reading);
+      const ds = t.objectStore(STORES.readingDays);
+      let book: BookReading | null = null;
+      let todayCount = 0;
+      const rr = rs.get(bookId);
+      rr.onsuccess = () => {
+        const r: BookReading = (rr.result as BookReading | undefined) ?? { bookId, bits: new Uint8Array(0), count: 0, updatedAt: 0 };
+        const { bits, added } = setBit(new Uint8Array(r.bits), page);
+        book = { bookId, bits, count: added ? r.count + 1 : r.count, updatedAt: Date.now() };
+        if (added) rs.put(book);
+      };
+      const dr = ds.get(day);
+      dr.onsuccess = () => {
+        const d: ReadingDay = (dr.result as ReadingDay | undefined) ?? { date: day, keys: [] };
+        const key = `${bookId}:${page}`;
+        if (!d.keys.includes(key)) {
+          d.keys = [...d.keys, key];
+          ds.put(d);
+        }
+        todayCount = d.keys.length;
+      };
+      t.oncomplete = () => resolve({ book: book!, todayCount });
+      t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error ?? new Error("transaction aborted"));
+    });
   }
 
   async getDay(day: DayKey): Promise<ReadingDay> {

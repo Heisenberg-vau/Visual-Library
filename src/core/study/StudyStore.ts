@@ -1,4 +1,4 @@
-import { STORES, tx } from "../storage/idb";
+import { STORES, tx, updateRecords } from "../storage/idb";
 import type { DayKey } from "./dates";
 import type { Task } from "./tasks";
 
@@ -16,11 +16,14 @@ export class StudyStore {
 
   async addTime(date: DayKey, ms: number, bookId: string | null): Promise<StudyDay> {
     if (ms <= 0) return this.getDay(date);
-    const d = await this.getDay(date);
-    d.ms += ms;
-    if (bookId) d.books[bookId] = (d.books[bookId] ?? 0) + ms;
-    await tx(STORES.study, "readwrite", (s) => s.put(d));
-    return d;
+    // one transaction: time added from two places at once is never lost
+    const out = await updateRecords<StudyDay>(STORES.study, [date], (cur) => {
+      const d: StudyDay = cur ? { ...cur, books: { ...cur.books } } : { date, ms: 0, books: {} };
+      d.ms += ms;
+      if (bookId) d.books[bookId] = (d.books[bookId] ?? 0) + ms;
+      return d;
+    });
+    return out.get(date)!;
   }
 
   // ---- tasks ----
