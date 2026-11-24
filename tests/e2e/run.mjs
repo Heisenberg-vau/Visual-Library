@@ -1188,12 +1188,13 @@ test("v1.1: walk to a stack, pull a real book out by its spine, open it, come ba
   await page.waitForFunction((i) => document.querySelector('[data-testid="home3d"]').dataset.view === `stack:${i}`, si);
   // bring the book into view, then tap its spine like a user would
   await W((id) => { const w = window.__world; w.pullById(id); w.putBack(); }, target.id);
-  await page.waitForTimeout(900);
+  await page.waitForFunction(() => window.__world.idle, null, { timeout: 15000 });
+  await page.waitForTimeout(200);
   const pt = await W((id) => window.__world.spineScreenPoint(id), target.id);
   await page.mouse.click(pt.x, pt.y);
   await page.waitForSelector('[data-testid="h3-panel"]:not([hidden])');
   assert.equal(await page.textContent('[data-testid="h3-title"]'), target.title);
-  await page.waitForTimeout(900);
+  await page.waitForFunction(() => window.__world.idle, null, { timeout: 15000 });
   await shot("51-room-pulled");
   await page.click('[data-testid="h3-open"]');
   await page.waitForSelector('[data-testid="scroller"]');

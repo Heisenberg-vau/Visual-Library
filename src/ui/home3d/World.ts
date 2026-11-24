@@ -216,6 +216,11 @@ export class LibraryWorld {
     return true;
   }
 
+  /** Nothing is moving (camera flight, books). */
+  get idle(): boolean {
+    return !this.anim && this.tweens.length === 0;
+  }
+
   get pulledBook(): WorldBook | null {
     return this.pulled?.data ?? null;
   }
