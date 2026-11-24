@@ -103,6 +103,8 @@ async function reveal() {
 async function drawerTile(testid) {
   await reveal();
   if (!(await page.isVisible('[data-testid="drawer"].open'))) await page.click('[data-testid="drawer-btn"]');
+  // wait until it has slid all the way in: a tap mid-slide lands on the scrim
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-testid="drawer"]')).transform === "none");
   await page.click(`[data-testid="drawer"] [data-testid="${testid}"]`);
 }
 
@@ -817,6 +819,7 @@ test("v1.6: paper first: pen case slots, quick wheel, two-finger undo, the edge 
   await page.click('[data-testid="pen-slot"][data-slot="0"]');
   // the edge comes back when you scroll up, and leaves when you scroll on
   await reveal();
+  await page.waitForTimeout(1300); // called back on purpose, it stays a moment
   const swipe = async (dy) => {
     await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx, y: cy, id: 5 }] });
     for (let k = 1; k <= 8; k++) await c.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: cx, y: cy + (dy * k) / 8, id: 5 }] });

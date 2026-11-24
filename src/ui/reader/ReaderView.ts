@@ -108,6 +108,8 @@ export class ReaderView {
   private userScrollAt = 0;
   private penAt = 0;
   private lastScrollTop = 0;
+  /** After the edge is called back on purpose it stays a moment. */
+  private edgePinnedUntil = 0;
   private gesture: { start: number; max: number; moved: boolean; x: number; y: number; long: number } | null = null;
   private main: HTMLElement;
   private divider: HTMLElement;
@@ -287,7 +289,7 @@ export class ReaderView {
       (this.progressLine = h("i", { class: "rh-progress", "data-testid": "read-progress", "aria-hidden": "true" })),
     );
     const edgeZone = h("div", { class: "edge-zone", "aria-hidden": "true" });
-    edgeZone.addEventListener("pointerdown", () => this.showEdge(true));
+    edgeZone.addEventListener("pointerdown", () => this.revealChrome());
 
     // ---- the drawer: everything else, grouped, with a command filter
     this.scrim = h("div", { class: "drawer-scrim" });
@@ -333,6 +335,7 @@ export class ReaderView {
 
   /** For tests and the keyboard: bring the top edge back. */
   revealChrome(): void {
+    this.edgePinnedUntil = Date.now() + 1200;
     this.showEdge(true);
   }
 
@@ -456,7 +459,7 @@ export class ReaderView {
           this.pencase.setDrawing(true);
         }
       }
-      if (e.pointerType !== "pen") this.userScrollAt = Date.now();
+      if (e.pointerType === "touch") this.userScrollAt = Date.now();
     });
     const penUp = (e: PointerEvent) => {
       if (e.pointerType === "pen" || e.pointerType === "mouse") this.pencase.setDrawing(false);
@@ -536,7 +539,7 @@ export class ReaderView {
         const d = top - this.lastScrollTop;
         this.lastScrollTop = top;
         if (Date.now() - this.userScrollAt > 800) return;
-        if (d > 8 && top > 60) this.showEdge(false);
+        if (d > 8 && top > 60 && Date.now() >= this.edgePinnedUntil) this.showEdge(false);
         else if (d < -8) this.showEdge(true);
       },
       { passive: true },
