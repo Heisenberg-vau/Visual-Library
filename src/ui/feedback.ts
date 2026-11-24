@@ -116,7 +116,28 @@ export function popupMenu(anchor: HTMLElement, items: { label: string; danger?: 
     );
   }
   backdrop.addEventListener("pointerdown", (e) => {
-    if (e.target === backdrop) backdrop.remove();
+    if (e.target !== backdrop) return;
+    const r = anchor.getBoundingClientRect();
+    if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+      // A second tap on the button that opened the menu closes it: that tap
+      // lands on the backdrop first, then its click would reopen the menu.
+      // Swallow exactly that one click.
+      // Swallow only the click of this very tap: the next touch, wherever,
+      // starts a new gesture and ends the swallowing (mouse clicks may never
+      // reach the button at all once the backdrop is gone).
+      const swallow = (ev: Event) => {
+        ev.stopImmediatePropagation();
+        ev.preventDefault();
+        done();
+      };
+      const done = () => {
+        anchor.removeEventListener("click", swallow, true);
+        window.removeEventListener("pointerdown", done, true);
+      };
+      anchor.addEventListener("click", swallow, true);
+      setTimeout(() => window.addEventListener("pointerdown", done, true), 0);
+    }
+    backdrop.remove();
   });
   backdrop.append(menu);
   document.body.append(backdrop);

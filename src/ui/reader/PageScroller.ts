@@ -52,9 +52,17 @@ export interface PageScrollerOptions {
 export function isStylus(t: Touch): boolean {
   return (t as Touch & { touchType?: string }).touchType === "stylus";
 }
+/**
+ * Contacts that can take part in a pinch: no stylus, no palm. A palm (or the
+ * side of a hand resting while you hold the tablet) is a large contact; with
+ * a finger swiping it used to look like a pinch and zoom on every swipe.
+ */
 function fingers(list: TouchList): Touch[] {
-  return [...list].filter((t) => !isStylus(t));
+  return [...list].filter((t) => !isStylus(t) && Math.max(t.radiusX || 0, t.radiusY || 0) <= PALM_RADIUS);
 }
+const PALM_RADIUS = 28; // CSS px; a fingertip is ~6–20
+/** Two fingers of a pinch land together; a contact down long before is resting, not pinching. */
+const PINCH_LAND_MS = 400;
 
 /**
  * Continuous vertical page view. Only pages near the viewport exist in the
@@ -341,9 +349,18 @@ export class PageScroller {
     return { x: t.clientX - r.left, y: t.clientY - r.top };
   }
 
+  /** When each contact came down (by identifier). */
+  private landed = new Map<number, number>();
+
   private onTouchStart = (e: TouchEvent): void => {
+    const now = performance.now();
+    for (const t of e.changedTouches) this.landed.set(t.identifier, now);
     const f = fingers(e.touches);
     if (f.length !== 2 || this.pinch) return;
+    // one of the two has been resting there: a hand holding the tablet, not a pinch
+    const t0 = this.landed.get(f[0].identifier) ?? now;
+    const t1 = this.landed.get(f[1].identifier) ?? now;
+    if (Math.abs(t0 - t1) > PINCH_LAND_MS) return;
     const p1 = this.viewportPoint(f[0]);
     const p2 = this.viewportPoint(f[1]);
     const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
@@ -373,6 +390,8 @@ export class PageScroller {
   };
 
   private onTouchEnd = (e: TouchEvent): void => {
+    for (const t of e.changedTouches) this.landed.delete(t.identifier);
+    if (!e.touches.length) this.landed.clear();
     if (!this.pinch || fingers(e.touches).length >= 2) return;
     const { ratio, anchor, mid } = this.pinch;
     this.pinch = null;

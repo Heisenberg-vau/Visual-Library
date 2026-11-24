@@ -830,6 +830,21 @@ test("v1.6: paper first: pen case slots, quick wheel, two-finger undo, the edge 
   assert.ok(await page.evaluate(() => document.querySelector(".reader-edge").classList.contains("away")), "scrolling on hides the edge");
   await swipe(200);
   assert.ok(!(await page.evaluate(() => document.querySelector(".reader-edge").classList.contains("away"))), "scrolling back shows it");
+  // v1.6.2: a hand resting on the screen + one finger swiping is not a pinch
+  const zoom0 = await page.textContent('[data-testid="zoom-label"]');
+  for (let k = 0; k < 3; k++) {
+    await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + 40, y: box.y + box.height - 60, id: 20 }] });
+    await page.waitForTimeout(600); // resting
+    await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + 40, y: box.y + box.height - 60, id: 20 }, { x: cx, y: cy + 120, id: 21 }] });
+    for (let j = 1; j <= 6; j++) await c.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: box.x + 40, y: box.y + box.height - 60, id: 20 }, { x: cx, y: cy + 120 - j * 40, id: 21 }] });
+    await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [{ x: box.x + 40, y: box.y + box.height - 60, id: 20 }] });
+  }
+  // a palm (large contact) landing with a finger is not a pinch either
+  await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx - 200, y: cy, id: 22, radiusX: 45, radiusY: 60 }, { x: cx, y: cy, id: 23 }] });
+  for (let j = 1; j <= 6; j++) await c.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: cx - 200, y: cy, id: 22, radiusX: 45, radiusY: 60 }, { x: cx + j * 30, y: cy - j * 20, id: 23 }] });
+  await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+  assert.equal(await page.textContent('[data-testid="zoom-label"]'), zoom0, "no zoom from a resting hand or a palm");
   // the drawer: find a command by typing
   await page.click('[data-testid="drawer-btn"]');
   await page.fill('[data-testid="drawer-find"]', "le");
@@ -1466,7 +1481,7 @@ function testPng(w = 2400, h = 1600) {
 }
 
 test("v1.6.1: every stack is seen from a clear aisle; leaving one turns the view one way only", async () => {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, hasTouch: true });
   await ctx.addInitScript(() => localStorage.setItem("vl.tour", "1"));
   const p = await ctx.newPage();
   await p.goto(URL);
@@ -1498,6 +1513,22 @@ test("v1.6.1: every stack is seen from a clear aisle; leaving one turns the view
   await p.evaluate(() => window.__world.goTo({ kind: "stack", index: 1 }, true));
   await p.waitForTimeout(300);
   await p.screenshot({ path: `${SHOTS}/62-stack-2.png` });
+  // v1.6.2: the ⋯ button toggles its menu with real taps (a second tap closes it, and it stays closed)
+  const more = await p.locator('[data-testid="h3-more"]').boundingBox();
+  const tc = await ctx.newCDPSession(p);
+  const tap = async () => {
+    const pt = { x: more.x + more.width / 2, y: more.y + more.height / 2 };
+    await tc.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [pt] });
+    await tc.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await p.waitForTimeout(450);
+  };
+  await tap();
+  assert.equal(await p.locator(".menu").count(), 1, "first tap opens");
+  await tap();
+  assert.equal(await p.locator(".menu").count(), 0, "second tap closes it, and it stays closed");
+  await tap();
+  assert.equal(await p.locator(".menu").count(), 1, "third tap opens it again");
+  await p.mouse.click(640, 700);
   await ctx.close();
 });
 

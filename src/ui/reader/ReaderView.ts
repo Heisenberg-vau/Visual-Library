@@ -471,7 +471,8 @@ export class ReaderView {
    */
   private wireGestures(): void {
     const m = this.main;
-    const fingers = (l: TouchList) => [...l].filter((t) => (t as Touch & { touchType?: string }).touchType !== "stylus");
+    // no stylus, no palm (a large contact): a resting hand is never a gesture
+    const fingers = (l: TouchList) => [...l].filter((t) => (t as Touch & { touchType?: string }).touchType !== "stylus" && Math.max(t.radiusX || 0, t.radiusY || 0) <= 28);
     m.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "pen" || (e.pointerType === "mouse" && e.button === 0 && this.tools.tool !== "hand")) {
         this.penAt = Date.now();

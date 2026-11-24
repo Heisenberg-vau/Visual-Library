@@ -53,6 +53,7 @@ Kiến trúc và quy ước: xem [ARCHITECTURE.md](ARCHITECTURE.md). Mỗi lần
 | v1.5.1 | Vạch đồng mảnh dưới tiêu đề chạy cho biết đang ở đâu trong sách; chạm vào tranh trên tường ở sảnh để treo ảnh của bạn (thu nhỏ ≤ 1600 px, JPEG, chỉ lưu trên máy), có thể treo lại tranh gốc | ✅ v1.5.1 |
 | v1.6 | Màn hình đọc "giấy là trung tâm": viền trên mỏng tự ẩn khi đọc/viết (cuộn ngược lên hoặc chạm mép trên để hiện), tên sách + số trang cùng một kiểu chữ; hộp bút gắn mép (mặc định bên phải) với 3 ô nhanh (giữ để cất bút), bảng công cụ/màu/nét; giữ 1 ngón để mở vòng chọn nhanh; chạm 2 ngón hoàn tác, 3 ngón làm lại; mọi thứ khác trong Ngăn kéo ⋯ có ô tìm lệnh; số trang/thu phóng hiện thoáng qua; giấy luôn trắng; trang chừa chỗ cho hộp bút. Sửa: cập nhật thông tin sách trong một giao dịch duy nhất (trước đây hai lần lưu gần nhau có thể ghi đè nhau, ví dụ số trang vở vừa khôi phục) | ✅ v1.6.0 |
 | v1.6.1 | Sửa theo góp ý trên Pad: các tủ cách nhau đủ rộng để camera ở tủ 2 trở đi không bị tủ trước chắn; rời tủ về sảnh camera chỉ quay một chiều (không xoay vòng); viền trên chỉ phủ cột sách, vở lên sát mép trên; hộp bút thành thanh dọc kín chiều cao (không còn khoảng hở); thanh chia đôi chỉ to lên một chút và phát sáng khi chạm; chữ trên đầu vở rõ nét hơn | ✅ v1.6.1 |
+| v1.6.2 | Sửa: tay tì lên màn hình (lòng bàn tay, ngón đặt sẵn) + 1 ngón vuốt không còn bị hiểu là chụm để phóng to; nút ⋯ chạm lần hai là đóng menu (trước đây đóng rồi mở lại ngay) | ✅ v1.6.2 |
 
 ## Cần quan tâm (chưa test / để sau)
 
