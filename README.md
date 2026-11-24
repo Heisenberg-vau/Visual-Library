@@ -49,7 +49,7 @@ Kiến trúc và quy ước: xem [ARCHITECTURE.md](ARCHITECTURE.md). Mỗi lần
 | v1.2.1 | Thay dãy kệ trang trí bằng tranh sơn dầu (vẽ bằng code, lối cổ điển) khung mạ vàng, chậu cây, tượng bán thân, bình gốm, quả địa cầu | ✅ v1.3.0 |
 | v1.3 | Bảng ghim 3D: 4 tờ giấy Hôm nay / Tuần này / Dự định / Sự kiện sắp tới hiện kế hoạch thật (ghim đỏ khi sắp tới hạn); chạm tờ giấy để mở mục; tick xong, thêm, sửa ngay trong phòng; loại việc mới "Dự định" | ✅ v1.3.0 |
 | v1.4 | Sảnh: lời chào + tóm tắt hôm nay, lối tắt tới bàn học, bảng ghim và từng tủ; camera đi vòng qua lối đi trước các tủ (không xuyên tủ), thời gian theo quãng đường, nhìn về hướng đang đi; nút ‹ › ở mép trái để sang tủ bên cạnh; hướng dẫn lần đầu bay qua từng khu (xem lại trong ⋮); tôn trọng chế độ giảm chuyển động | ✅ v1.4.0 |
-| v1.5 | Màn hình đọc theo phong cách mới và hoàn thiện | |
+| v1.5 | Màn hình đọc: tên sách thành dòng tiêu đề chạy (chữ hoa nhỏ giữa hai vạch đồng, không còn bị cắt), công cụ bút trong khay lõm viền đồng, nền quanh trang là mặt bàn gỗ óc chó có ánh đèn, trang giấy đổ bóng như nằm trên bàn, tay nắm chia đôi bằng đồng, thanh nổi chế độ tập trung bằng gỗ, mở sách hiện dần (tắt khi giảm chuyển động) | ✅ v1.5.0 |
 
 ## Cần quan tâm (chưa test / để sau)
 

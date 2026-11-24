@@ -285,7 +285,7 @@ export class ReaderView {
     this.bookmarkBtn.dataset.testid = "bookmark-btn";
     const nbBtn = iconButton("notebook", "Mở vở ghi chép bên cạnh", () => void this.chooseNotebook(nbBtn));
     nbBtn.dataset.testid = "nb-btn";
-    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, this.bookmarkBtn);
+    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, h("span", { class: "tray-sep", "aria-hidden": "true" }), this.bookmarkBtn);
     if (!this.isNotebook) toolGroup.append(marginBtn);
     toolGroup.append(exportBtn);
     if (!this.isNotebook) toolGroup.append(nbBtn);
@@ -301,7 +301,6 @@ export class ReaderView {
       { class: "reader-toolbar" },
       iconButton("back", "Về kệ sách", () => deps.onClose(), "tb-back"),
       iconButton("panel", "Trang và mục lục", () => this.togglePanel(), "tb-panel"),
-      h("div", { class: "reader-title", title: book.title }, book.title),
       toolGroup,
       studyGroup,
       h(
@@ -353,6 +352,16 @@ export class ReaderView {
       "div",
       { class: `reader ${this.isNotebook ? "is-notebook" : ""}` },
       toolbar,
+      // the book's title as a running head, like a printed book
+      h(
+        "div",
+        { class: "reader-head" },
+        h("span", { class: "rh-rule" }),
+        h("span", { class: "rh-orn", "aria-hidden": "true" }, "❦"),
+        h("div", { class: "reader-title", title: book.title }, book.title),
+        h("span", { class: "rh-orn", "aria-hidden": "true" }, "❦"),
+        h("span", { class: "rh-rule" }),
+      ),
       h("div", { class: "reader-body" }, this.sidebar, this.main),
       this.pill,
     );

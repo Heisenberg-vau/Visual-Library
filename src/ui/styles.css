@@ -940,3 +940,73 @@ svg.ic { stroke-width: 1.65; }
 .tour-card .h3-ghost { flex: 0 0 auto; padding: 0 18px; }
 @keyframes tour-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @media (prefers-reduced-motion: reduce) { .tour-card { animation: none; } }
+
+/* =====================================================================
+   v1.5 — the reader in the library's style
+   ===================================================================== */
+:root { --desk-a: #4b3322; --desk-b: #3c2819; --desk-c: #2c1d12; }
+:root[data-theme="night"] { --desk-a: #241811; --desk-b: #1c130c; --desk-c: #120c07; }
+
+/* Toolbar: the pen tools sit in a recessed, brass-rimmed tray */
+.reader-toolbar { gap: 8px; padding: 0 10px; }
+.reader-toolbar .icon-btn { width: 42px; height: 42px; border-radius: 9px; }
+.reader-toolbar .tool-group {
+  border-left: 0; gap: 1px; padding: 3px 5px; border-radius: 12px;
+  background: rgb(0 0 0 / 0.24); box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.45), 0 0 0 1px color-mix(in srgb, var(--gold) 30%, transparent);
+}
+.reader-toolbar .tool-group:first-of-type { margin-right: auto; }
+.reader-toolbar .study-group { background: rgb(0 0 0 / 0.14); }
+.reader-toolbar .zoom-group { border-left: 0; margin-left: 0; padding-left: 0; }
+.tray-sep { width: 1px; align-self: stretch; margin: 6px 5px; background: color-mix(in srgb, var(--gold) 35%, transparent); }
+
+/* Running head: the title between brass rules */
+.reader-head {
+  flex: none; display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 18px;
+  background: linear-gradient(180deg, var(--desk-c), var(--desk-b)); color: var(--wood-soft);
+  border-bottom: 1px solid rgb(0 0 0 / 0.35); user-select: none;
+}
+.reader-head .reader-title {
+  flex: 0 1 auto; min-width: 0; padding: 0; font-family: var(--font-display); font-weight: 600; font-size: 16px;
+  font-variant: small-caps; letter-spacing: 1px; color: var(--wood-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rh-orn { color: var(--gold); font-size: 13px; opacity: 0.85; }
+.rh-rule { flex: 1; height: 0; border-top: 1px solid color-mix(in srgb, var(--gold) 38%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--gold) 16%, transparent); padding-top: 2px; min-width: 24px; }
+.reader.focus .reader-head { display: none; }
+@media (max-width: 899px) { .reader-head .reader-title { display: block; } }
+
+/* The desk around the pages: walnut planks, a lamp's warmth from above */
+.reader-body {
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 0%, rgb(255 214 150 / 0.12), transparent 70%),
+    radial-gradient(ellipse 120% 80% at 50% 120%, rgb(0 0 0 / 0.42), transparent 70%),
+    repeating-linear-gradient(90deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 7px, rgb(255 225 180 / 0.025) 7px 9px, transparent 9px 19px),
+    repeating-linear-gradient(90deg, transparent 0 158px, rgb(0 0 0 / 0.22) 158px 160px, rgb(255 225 180 / 0.04) 160px 161px),
+    linear-gradient(90deg, var(--desk-a), var(--desk-b) 22%, var(--desk-a) 47%, var(--desk-b) 71%, var(--desk-a));
+}
+.pages-scroller { background: transparent; }
+/* paper lying on the desk */
+.page-slot {
+  box-shadow: 0 0 0 1px rgb(60 40 20 / 0.28), 0 2px 3px rgb(0 0 0 / 0.3), 0 10px 22px rgb(0 0 0 / 0.32), 0 26px 50px -12px rgb(0 0 0 / 0.45);
+}
+.page-placeholder { display: grid; place-items: center; align-content: center; gap: 6px; height: 100%; color: #c4b48f; font-size: 30px; }
+.page-placeholder::before { content: "❦"; font-size: 22px; color: #d8c79d; }
+
+/* Split: a brass handle */
+.split-divider { background: linear-gradient(90deg, var(--desk-c), var(--wood-2), var(--desk-c)); }
+.split-divider span { background: linear-gradient(180deg, #e2c27a, var(--gold)); box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35); }
+
+/* Focus mode: the floating bar is a strip of walnut */
+.reader.focus .focus-pill {
+  background: linear-gradient(180deg, var(--wood), var(--wood-2)); color: var(--wood-ink);
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent); box-shadow: 0 10px 30px rgb(20 12 6 / 0.45);
+}
+.reader.focus .focus-pill .icon-btn { color: var(--wood-ink); }
+.reader.focus .focus-pill .tool-btn.active { background: color-mix(in srgb, var(--gold) 26%, transparent); color: #f6e6c0; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 60%, transparent); }
+.reader.focus .pill-sep { background: color-mix(in srgb, var(--gold) 35%, transparent); }
+
+/* Opening a book: a soft fade (opacity only: no layout shift under the pen) */
+.reader { animation: reader-in 0.32s ease-out; }
+@keyframes reader-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .reader { animation: none; } }
+.reader.focus .focus-pill { opacity: 0.95; }
+.reader.focus .pill-page { color: var(--wood-ink); font-variant-numeric: tabular-nums; }

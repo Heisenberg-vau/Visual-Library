@@ -1087,6 +1087,15 @@ test("clip: resize with the corner handle, edit text with a pen tap", async () =
   const img = (await nbClips(2)).find((c) => c.kind === "image");
   const [x, y, w, h] = img.rects;
   const W = 595, H = 842;
+  // keep the clip's corner on screen (the running head takes a little height)
+  await page.evaluate(([fy]) => {
+    const sc = document.querySelector(".nb-pane .pages-scroller");
+    const slot = sc.querySelector('.page-slot[data-page="2"]').getBoundingClientRect();
+    const box = sc.getBoundingClientRect();
+    const want = slot.top + slot.height * fy + 60 - box.bottom;
+    if (want > 0) sc.scrollTop += want;
+  }, [(y + h) / H]);
+  await page.waitForTimeout(150);
   // Drag the bottom-right handle inwards: half the size, same shape.
   await penStroke(2, [[(x + w) / W, (y + h) / H], [(x + w * 0.5) / W, (y + h * 0.5) / H]], { root: NB });
   const small = (await nbClips(2)).find((c) => c.kind === "image").rects;
