@@ -83,6 +83,8 @@ const ICONS: Record<string, string> = {
   repeat: '<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   // Emblem: an open book under a small lamp flame (original mark).
   emblem: '<path d="M12 7.5c-1.8-1.2-4.6-1.7-8-1.5v11.5c3.4-.2 6.2.3 8 1.5 1.8-1.2 4.6-1.7 8-1.5V6c-3.4-.2-6.2.3-8 1.5z"/><path d="M12 7.5V19"/><path d="M12 1.8c.9 1 1.3 1.8 1.3 2.5a1.3 1.3 0 0 1-2.6 0c0-.7.4-1.5 1.3-2.5z"/>',
+  home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M10 19.5v-5h4v5"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>',
   moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   candle: '<path d="M9 21h6"/><rect x="9.5" y="10" width="5" height="11" rx="1"/><path d="M12 3c1.2 1.3 1.7 2.3 1.7 3.2a1.7 1.7 0 0 1-3.4 0C10.3 5.3 10.8 4.3 12 3z"/>',
   margin: '<rect x="3" y="4" width="12" height="16" rx="1"/><path d="M18 4v16M21 4v16" stroke-dasharray="2 2"/>',

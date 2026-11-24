@@ -31,6 +31,8 @@ export interface LibraryViewDeps {
 
 /** Bookshelf screen: shelves, tags, import, list, bulk actions. */
 export class LibraryView {
+  /** Set by the app when the 3D library is available. */
+  onSwitchTo3d: (() => void) | null = null;
   readonly el: HTMLElement;
   private panel: ShelfPanel;
   private grid: HTMLElement;
@@ -91,6 +93,9 @@ export class LibraryView {
       if (el) this.renderOcrStatus(id, el);
     });
     this.plannerBadge = h("span", { class: "badge", hidden: true, "data-testid": "planner-badge" });
+    const roomBtn = h("button", { class: "btn btn-room", type: "button", "data-testid": "to-3d", title: "Về không gian thư viện 3D" }, h("span", { html: icon("emblem", 18) }), "Thư viện 3D");
+    roomBtn.addEventListener("click", () => this.onSwitchTo3d?.());
+    queueMicrotask(() => (roomBtn.hidden = !this.onSwitchTo3d));
     const themeBtn = h("button", { class: "icon-btn theme-btn", type: "button", "data-testid": "theme-btn" });
     const paintTheme = () => {
       const night = currentTheme() === "night";
@@ -162,6 +167,7 @@ export class LibraryView {
         h("div", { class: "lib-search" }, h("span", { class: "search-ic", html: icon("search", 18) }), this.filterInput),
         this.goalRing.el,
         deps.study.chip().el,
+        roomBtn,
         plannerBtn,
         themeBtn,
         selectBtn,

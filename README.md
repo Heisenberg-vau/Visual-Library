@@ -43,10 +43,11 @@ Kiến trúc và quy ước: xem [ARCHITECTURE.md](ARCHITECTURE.md). Mỗi lần
 | Mốc | Nội dung | Trạng thái |
 |---|---|---|
 | v1.0 | Bộ phong cách: màu gỗ óc chó/giấy da/xanh thư viện/vàng đồng, chữ EB Garamond + Cormorant Garamond (có sẵn offline), biểu tượng nét khắc, hai chế độ Giấy da / Ánh nến | ✅ v1.0.0 |
-| v1.1 | Màn hình thư viện: khu, kệ gỗ, sách trên kệ, "Đọc tiếp" | |
-| v1.2 | Màn hình đọc: thanh công cụ, bảng chọn bút, chế độ tập trung | |
-| v1.3 | Bàn học: kế hoạch, hẹn giờ, âm thanh, việc hôm nay | |
-| v1.4 | Hoàn thiện: chuyển cảnh, màn hình trống, hướng dẫn lần đầu, độ tương phản | |
+| v1.1 | Không gian thư viện 3D: mỗi danh mục là một dãy tủ, danh mục con là tầng kệ; gáy sách theo màu bìa và số trang; vuốt để lướt kệ; rút sách ra xem bìa thật, mở đọc; nhớ chỗ đang đứng | ✅ v1.1.0 |
+| v1.2 | Bàn học: lấy sách xuống bàn (tối đa 6), khoảng trống trên kệ, bụi và lời nhắc cất | |
+| v1.3 | Bảng ghim 3D: việc hôm nay, kế hoạch tuần, dự định, sự kiện sắp tới | |
+| v1.4 | Sảnh, chuyển cảnh giữa các khu, hướng dẫn lần đầu | |
+| v1.5 | Màn hình đọc theo phong cách mới và hoàn thiện | |
 
 ## Cần quan tâm (chưa test / để sau)
 

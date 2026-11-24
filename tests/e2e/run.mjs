@@ -34,13 +34,18 @@ before(async () => {
   await waitForServer();
   browser = await chromium.launch({
     executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome",
-    args: ["--no-sandbox"],
+    // software WebGL so the 3D library renders in headless/CI Chrome
+    args: ["--no-sandbox", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
   });
   context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 2,
     hasTouch: true,
     locale: "vi-VN",
+  });
+  // The older tests drive the list view; the 3D room has its own tests below.
+  await context.addInitScript(() => {
+    if (!localStorage.getItem("vl.home")) localStorage.setItem("vl.home", "list");
   });
   page = await context.newPage();
   page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
@@ -85,6 +90,12 @@ const currentPage = () => page.evaluate(() => window.__reader.scrollerForTests.c
 async function openBook(titlePart) {
   await cards().filter({ hasText: titlePart }).first().click();
   await page.waitForSelector('[data-testid="scroller"]');
+}
+
+async function backToShelf3d() {
+  await page.click(".tb-back");
+  await page.waitForSelector('[data-testid="home3d"][data-ready="1"]');
+  await page.waitForTimeout(300);
 }
 
 async function backToShelf() {
@@ -1139,6 +1150,84 @@ test("v1.0: Giấy da / Ánh nến theme, remembered after reload", async () => 
   assert.ok(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check('16px "EB Garamond"', "Thư viện") && document.fonts.check('700 16px "Cormorant Garamond"', "Đọc"); }));
 });
 
+// ---- v1.1: the 3D library room ----
+
+const W = (fn, arg) => page.evaluate(fn, arg);
+
+test("v1.1: the 3D room shows every shelf as a stack, cheaply", async () => {
+  const nBooks = await cards().count();
+  const nRoots = await W(async () => (await window.__app.library.listCategories()).filter((c) => !c.parentId).length);
+  const loose = await W(async () => {
+    const [books, cats] = await Promise.all([window.__app.library.list(), window.__app.library.listCategories()]);
+    const ids = new Set(cats.map((c) => c.id));
+    return books.some((b) => !b.categoryId || !ids.has(b.categoryId));
+  });
+  await page.click('[data-testid="to-3d"]');
+  await page.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
+  const info = await W(() => window.__world.info());
+  assert.equal(info.books, nBooks, "every book and notebook is on a shelf");
+  assert.equal(await W(() => window.__world.stackCount()), nRoots + (loose ? 1 : 0));
+  assert.ok(info.calls < 250, `draw calls stay low (${info.calls})`);
+  assert.ok(info.textures < 80, `few textures (${info.textures})`);
+  await page.waitForTimeout(800);
+  await shot("50-room-hall");
+});
+
+test("v1.1: walk to a stack, pull a real book out by its spine, open it, come back to the same spot", async () => {
+  const target = await W(async () => {
+    const all = await window.__app.library.list();
+    return all.find((b) => b.title.includes("650")) ?? all[0];
+  });
+  const si = await W((id) => {
+    const w = window.__world;
+    for (let i = 0; i < w.stackCount(); i++) if (w.stackAt(i).tiers.some((t) => t.books.some((b) => b.id === id))) return i;
+    return -1;
+  }, target.id);
+  assert.ok(si >= 0);
+  await W((i) => window.__world.goTo({ kind: "stack", index: i }, true), si);
+  await page.waitForFunction((i) => document.querySelector('[data-testid="home3d"]').dataset.view === `stack:${i}`, si);
+  // bring the book into view, then tap its spine like a user would
+  await W((id) => { const w = window.__world; w.pullById(id); w.putBack(); }, target.id);
+  await page.waitForTimeout(900);
+  const pt = await W((id) => window.__world.spineScreenPoint(id), target.id);
+  await page.mouse.click(pt.x, pt.y);
+  await page.waitForSelector('[data-testid="h3-panel"]:not([hidden])');
+  assert.equal(await page.textContent('[data-testid="h3-title"]'), target.title);
+  await page.waitForTimeout(900);
+  await shot("51-room-pulled");
+  await page.click('[data-testid="h3-open"]');
+  await page.waitForSelector('[data-testid="scroller"]');
+  await backToShelf3d();
+  assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), `stack:${si}`, "back where you were");
+  // and after a reload too
+  await page.reload();
+  await page.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
+  assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), `stack:${si}`, "remembered across restarts");
+});
+
+test("v1.1: favourite from the pulled-out book; import lands on the stack you stand at", async () => {
+  const v = await page.getAttribute('[data-testid="home3d"]', "data-view");
+  const si = Number(v.split(":")[1]);
+  const stack = await W((i) => window.__world.stackAt(i), si);
+  const book = stack.tiers.flatMap((t) => t.books).find((b) => !b.cloth);
+  await W((id) => window.__world.pullById(id), book.id);
+  await page.waitForSelector('[data-testid="h3-panel"]:not([hidden])');
+  const before = await W(async (id) => (await window.__app.library.get(id)).favorite ?? false, book.id);
+  await page.click('[data-testid="h3-fav"]');
+  await page.waitForFunction(async ([id, b]) => ((await window.__app.library.get(id)).favorite ?? false) !== b, [book.id, before]);
+  await W((id) => window.__app.library.setFavorite(id, false), book.id);
+  // import while standing at this stack
+  const n0 = await W(() => window.__world.info().books);
+  await page.setInputFiles('[data-testid="h3-file-input"]', [`${FIX}/scan-pause.pdf`, `${FIX}/small.pdf`]);
+  await page.waitForSelector(".toast");
+  await page.waitForTimeout(1500);
+  assert.equal(await W(() => window.__world.info().books), n0, "both already on a shelf: duplicates are not added twice");
+  // back to the list view for the remaining tests
+  await page.click('[data-testid="h3-list"]');
+  await page.waitForSelector('[data-testid="book-card"]');
+  assert.equal(await W(() => localStorage.getItem("vl.home")), "list");
+});
+
 test("works offline after the first visit", async () => {
   await page.waitForFunction(async () => (await navigator.serviceWorker?.getRegistration())?.active, null, { timeout: 20000 });
   await page.reload(); // let the service worker control the page
@@ -1265,6 +1354,7 @@ test("milestone 2: deleting a shelf keeps its books", async () => {
 
 test("milestone 2: data saved by v0.1.0 still loads", async () => {
   const ctx = await browser.newContext();
+  await ctx.addInitScript(() => localStorage.setItem("vl.home", "list"));
   const p = await ctx.newPage();
   await p.goto(URL + "icons/icon.svg");
   await p.evaluate(() => new Promise((resolve, reject) => {

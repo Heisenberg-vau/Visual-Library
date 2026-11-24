@@ -12,6 +12,7 @@ import type { BookMeta } from "../core/types";
 import { UserFacingError } from "../core/types";
 import { toast } from "../ui/feedback";
 import { LibraryView, type ShelfView } from "../ui/library/LibraryView";
+import { HomeView } from "../ui/home3d/HomeView";
 import { DEFAULT_TOOLS, type ToolState } from "../ui/reader/InkLayer";
 import { ReaderView, type NotebookHost } from "../ui/reader/ReaderView";
 import { StudyStore } from "../core/study/StudyStore";
@@ -62,6 +63,8 @@ const pdfInspector: DocInspector = {
 export class App {
   readonly library: LibraryService;
   private libraryView: LibraryView;
+  /** The 3D library room (home), when WebGL works and the user hasn't chosen the list. */
+  private home: HomeView | null = null;
   private reader: ReaderView | null = null;
   private opening = false;
   private inkStore = new InkStore();
@@ -121,6 +124,17 @@ export class App {
         minutesToday: () => Math.floor(this.study.todayTotal / 60_000),
       },
     });
+    if (HomeView.supported()) {
+      this.home = new HomeView({
+        library: this.library,
+        loadReading: () => this.readingStore.all(),
+        onOpen: (b) => void this.open(b),
+        onList: () => void this.setHomeMode("list"),
+        onPlanner: () => void this.openPlanner(),
+        onFirstImport: () => void requestPersistentStorage(),
+      });
+    }
+    this.libraryView.onSwitchTo3d = this.home ? () => void this.setHomeMode("3d") : null;
     window.addEventListener("popstate", () => {
       if (this.reader && !location.hash.startsWith("#read/")) void this.closeReader(false);
       if (this.planner && location.hash !== "#plan") void this.closePlanner();
@@ -130,8 +144,7 @@ export class App {
   async start(): Promise<void> {
     await Promise.all([this.ambience.init(), this.study.init()]);
     void this.index.enqueueAll();
-    this.root.replaceChildren(this.libraryView.el);
-    await this.libraryView.refresh();
+    await this.showHome();
     // Reload while reading -> reopen the same book.
     const m = location.hash.match(/^#read\/(.+)$/);
     if (m) {
@@ -233,6 +246,7 @@ export class App {
       this.study.bookId = book.id;
       if (push) history.pushState({ read: book.id }, "", `#read/${encodeURIComponent(book.id)}`);
       this.libraryView.el.remove();
+      this.home?.pause();
       this.root.replaceChildren(this.reader.el);
       this.reader.start();
       (window as unknown as { __reader?: ReaderView }).__reader = this.reader;
@@ -260,6 +274,7 @@ export class App {
       onOpenBook: (id, page) => void this.openAt(id, page),
     });
     history.pushState({ plan: true }, "", "#plan");
+    this.home?.pause();
     this.root.replaceChildren(this.planner.el);
     await this.planner.refresh();
     (window as unknown as { __planner?: PlannerView }).__planner = this.planner;
@@ -268,8 +283,7 @@ export class App {
   private async closePlanner(): Promise<void> {
     if (!this.planner) return;
     this.planner = null;
-    this.root.replaceChildren(this.libraryView.el);
-    await this.libraryView.refresh();
+    await this.showHome();
   }
 
   /** Opens a book (or notebook) at a page, e.g. from a planned task. */
@@ -297,8 +311,37 @@ export class App {
     if (popHistory) history.back();
     await r.destroy();
     if (!showShelf) return;
-    this.root.replaceChildren(this.libraryView.el);
-    await this.libraryView.refresh();
+    await this.showHome();
+  }
+
+  // ---- home: 3D room or list ---------------------------------------------
+
+  private get homeMode(): "3d" | "list" {
+    try {
+      return this.home && localStorage.getItem("vl.home") !== "list" ? "3d" : "list";
+    } catch {
+      return this.home ? "3d" : "list";
+    }
+  }
+
+  private async setHomeMode(m: "3d" | "list"): Promise<void> {
+    try {
+      localStorage.setItem("vl.home", m);
+    } catch {
+      /* ignore */
+    }
+    await this.showHome();
+  }
+
+  private async showHome(): Promise<void> {
+    if (this.homeMode === "3d" && this.home) {
+      this.root.replaceChildren(this.home.el);
+      await this.home.refresh();
+    } else {
+      this.home?.pause();
+      this.root.replaceChildren(this.libraryView.el);
+      await this.libraryView.refresh();
+    }
   }
 }
 

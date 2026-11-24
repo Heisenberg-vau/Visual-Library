@@ -21,6 +21,10 @@ export interface ShelfBook {
   t: number;
   /** Centre in the stack's local space. */
   pos: THREE.Vector3;
+  /** Being read: a ribbon hangs out of the top. */
+  ribbon?: boolean;
+  /** Favourite: a small gilt stamp at the foot of the spine. */
+  favorite?: boolean;
 }
 
 const ATLAS = 2048;
@@ -42,7 +46,7 @@ function rng(seed: number): () => number {
 }
 
 /** Paints one spine into a cell (the same art as the single-book texture). */
-export function paintSpine(ctx: CanvasRenderingContext2D, x0: number, y0: number, W: number, H: number, title: string, color: string, seed: number, style: SpineStyle, cloth: boolean): void {
+export function paintSpine(ctx: CanvasRenderingContext2D, x0: number, y0: number, W: number, H: number, title: string, color: string, seed: number, style: SpineStyle, cloth: boolean, favorite = false): void {
   const r = rng(seed);
   ctx.save();
   ctx.beginPath();
@@ -85,6 +89,24 @@ export function paintSpine(ctx: CanvasRenderingContext2D, x0: number, y0: number
   } else {
     ctx.fillStyle = "#151515";
     ctx.fillRect(0, H * 0.62, W, 14 * k);
+  }
+  if (favorite) {
+    // gilt stamp near the foot
+    const cx = W / 2;
+    const cy = H - 30 * k;
+    const r0 = Math.min(W * 0.28, 15 * k);
+    const g = ctx.createRadialGradient(cx - r0 / 3, cy - r0 / 3, 1, cx, cy, r0);
+    g.addColorStop(0, "#fbe7a6");
+    g.addColorStop(1, "#a8792c");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#5a4218";
+    ctx.font = `${r0 * 1.2}px serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("★", cx, cy + 1);
   }
   ctx.translate(W / 2, H / 2 + 40 * k);
   ctx.rotate(style === "up" ? -Math.PI / 2 : Math.PI / 2);
@@ -132,8 +154,8 @@ export class StackChunk {
   readonly books: ShelfBook[];
   private positions: Float32Array;
   private original: Float32Array;
-  private static readonly V = 16; // 4 faces × 4 vertices
-  static readonly T = 8; // triangles per book
+  private static readonly V = 20; // 5 faces × 4 vertices (spine, top, 2 covers, ribbon)
+  static readonly T = 10; // triangles per book
 
   constructor(books: ShelfBook[], style: SpineStyle, renderer: THREE.WebGLRenderer) {
     this.books = books;
@@ -144,7 +166,7 @@ export class StackChunk {
     books.forEach((b, i) => {
       const cx = (i % COLS) * CW;
       const cy = Math.floor(i / COLS) * CH;
-      paintSpine(ctx, cx + 2, cy + 2, CW - 4, CH - 4, b.title, b.color, hash(b.id), style, b.cloth);
+      paintSpine(ctx, cx + 2, cy + 2, CW - 4, CH - 4, b.title, b.color, hash(b.id), style, b.cloth, b.favorite);
     });
     const map = new THREE.CanvasTexture(c);
     map.colorSpace = THREE.SRGBColorSpace;
@@ -197,9 +219,16 @@ export class StackChunk {
       const wuv = [[wu0, wv0], [wu1, wv0], [wu1, wv1], [wu0, wv1]];
       face([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], [0, 0, 1], wuv, cc);
       face([[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]], [0, 0, -1], wuv, cc);
-      for (let f = 0; f < 4; f++) {
+      // ribbon hanging out of the top, near the spine (degenerate when not reading)
+      const rc = new THREE.Color("#8c2b22");
+      const rz = z - t * 0.15;
+      const rx = x0 + 0.018;
+      const ry = b.ribbon ? y1 + 0.035 : y1;
+      const rw = b.ribbon ? Math.min(0.009, t * 0.5) : 0;
+      face([[rx, y1 - 0.01, rz], [rx, y1 - 0.01, rz + rw], [rx - 0.004, ry, rz + rw], [rx - 0.004, ry, rz]], [-1, 0, 0], wuv, rc);
+      for (let f = 0; f < 5; f++) {
         const a = v0 + f * 4;
-        idx.set([a, a + 1, a + 2, a, a + 2, a + 3], (i * 4 + f) * 6);
+        idx.set([a, a + 1, a + 2, a, a + 2, a + 3], (i * 5 + f) * 6);
       }
     });
     const geo = new THREE.BufferGeometry();
@@ -218,7 +247,7 @@ export class StackChunk {
   }
 
   bookAtFace(faceIndex: number): ShelfBook | null {
-    return this.books[Math.floor(faceIndex / 4 / 2)] ?? null;
+    return this.books[Math.floor(faceIndex / StackChunk.T)] ?? null;
   }
 
   /** Hide (pulled out / on the desk) or show a book in place. */
