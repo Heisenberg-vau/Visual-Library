@@ -2,7 +2,7 @@ import type { LibraryService, ImportResult } from "../../core/storage/LibrarySer
 import type { BookMeta, Category } from "../../core/types";
 import type { BookReading } from "../../core/study/reading";
 import { h, icon } from "../dom";
-import { confirmDialog, popupMenu, toast } from "../feedback";
+import { confirmDialog, toast } from "../feedback";
 import { DESK_MAX, dustLevel, evictionCandidate, idleDays, putOnDesk, removeFromDesk, type DeskItem } from "../../core/desk";
 import type { SpineStyle } from "./textures";
 import { LibraryWorld, type BoardNote, type DeskEntry, type NoteKey, type WorldBook, type WorldStack, type WorldView } from "./World";
@@ -63,6 +63,9 @@ export class HomeView {
   private customPictures = new Set<number>();
   private pictureInput: HTMLInputElement;
   private pictureSlot = -1;
+  private drawer: HTMLElement;
+  private scrim: HTMLElement;
+  private moreBtn!: HTMLButtonElement;
 
   /** WebGL may be unavailable (very old devices): then the list view is used. */
   static supported(): boolean {
@@ -88,40 +91,28 @@ export class HomeView {
       this.pictureInput.value = "";
       if (f && this.pictureSlot >= 0) void this.usePicture(this.pictureSlot, f);
     });
-    const btn = (label: string, testid: string, run: () => void, ic?: string) => {
-      const b = h("button", { class: "h3-btn", type: "button", "data-testid": testid }, ic ? h("span", { html: icon(ic, 18) }) : null, label);
-      b.addEventListener("click", run);
-      return b;
-    };
-    const more = h("button", { class: "h3-btn h3-icon", type: "button", "aria-label": "Thêm", "data-testid": "h3-more", html: icon("more", 20) });
-    more.addEventListener("click", () =>
-      popupMenu(more, [
-        { label: "Danh sách & quản lý sách", run: () => this.deps.onList() },
-        { label: "Xem lại hướng dẫn", run: () => this.startTour() },
-        {
-          label: `Chữ trên gáy: ${this.spineStyle === "up" ? "từ dưới lên (nghiêng đầu sang trái)" : "từ trên xuống (nghiêng đầu sang phải)"} → đổi`,
-          run: () => this.toggleSpine(),
-        },
-      ]),
-    );
-    this.bar = h(
-      "header",
-      { class: "h3-bar" },
-      h("span", { class: "h3-brand", html: icon("emblem", 26) }),
+    // A thin edge: the name (which is also the way back to the hall), where you
+    // are, and one ⋯ that opens the drawer with everything else.
+    const brand = h(
+      "button",
+      { class: "h3-home", type: "button", "data-testid": "h3-hall", title: "Về sảnh", "aria-label": "Visual Library – về sảnh" },
+      h("span", { class: "h3-brand", html: icon("emblem", 22) }),
       h("span", { class: "h3-title" }, "Visual Library"),
-      this.where,
-      h("span", { class: "grow" }),
-      btn("Sảnh", "h3-hall", () => this.world?.goTo({ kind: "hall" }), "home"),
-      btn("Bảng ghim", "h3-board", () => this.world?.goTo({ kind: "board" }), "calendar"),
-      btn("Nhập sách", "h3-import", () => this.fileInput.click(), "plus"),
-      btn("Danh sách", "h3-list", () => this.deps.onList(), "list"),
-      more,
-      this.fileInput,
-      this.pictureInput,
     );
+    brand.addEventListener("click", () => {
+      this.openDrawer(false);
+      this.world?.goTo({ kind: "hall" });
+    });
+    const more = h("button", { class: "h3-more", type: "button", "aria-label": "Ngăn kéo", title: "Ngăn kéo", "data-testid": "h3-more", html: icon("more", 22) });
+    more.addEventListener("click", () => this.openDrawer(!this.drawer.classList.contains("open")));
+    this.moreBtn = more;
+    this.bar = h("header", { class: "h3-bar" }, brand, this.where, h("span", { class: "grow" }), more, this.fileInput, this.pictureInput);
+    this.scrim = h("div", { class: "h3-scrim" });
+    this.scrim.addEventListener("click", () => this.openDrawer(false));
+    this.drawer = this.buildDrawer();
     this.panel = h("aside", { class: "h3-panel", "data-testid": "h3-panel", hidden: true });
     this.strip = h("nav", { class: "h3-strip", "data-testid": "h3-strip", hidden: true });
-    this.el = h("div", { class: "home3d", "data-testid": "home3d" }, this.bar, this.panel, this.strip);
+    this.el = h("div", { class: "home3d", "data-testid": "home3d" }, this.bar, this.panel, this.strip, this.scrim, this.drawer);
   }
 
   private get spineStyle(): SpineStyle {
@@ -287,6 +278,7 @@ export class HomeView {
   // ------------------------------------------------------------ view state
 
   private onView(v: WorldView): void {
+    if (this.drawer?.classList.contains("open")) this.openDrawer(false);
     const s = v.kind === "stack" ? this.stacks[v.index] : null;
     this.where.textContent = v.kind === "hall" ? "· Sảnh" : v.kind === "desk" ? "· Bàn học" : v.kind === "board" ? "· Bảng ghim" : `· Kệ sách › ${s?.name ?? ""}`;
     this.el.dataset.view = v.kind === "stack" ? `stack:${v.index}` : v.kind;
@@ -396,6 +388,56 @@ export class HomeView {
       toast("Không đọc được ảnh này. Hãy thử ảnh JPG hoặc PNG khác.", "error");
     }
     if (this.world?.currentView.kind === "hall") this.renderPicturePanel(i);
+  }
+
+  // ------------------------------------------------------------ the drawer
+
+  private openDrawer(open: boolean): void {
+    this.drawer.classList.toggle("open", open);
+    this.scrim.classList.toggle("open", open);
+    this.moreBtn?.setAttribute("aria-expanded", String(open));
+    if (open) this.renderDrawer();
+  }
+
+  private spineLabel(): string {
+    return this.spineStyle === "up" ? "Chữ gáy: từ dưới lên" : "Chữ gáy: từ trên xuống";
+  }
+
+  private buildDrawer(): HTMLElement {
+    return h("aside", { class: "reader-drawer h3-drawer", "data-testid": "room-drawer", "aria-label": "Ngăn kéo" });
+  }
+
+  private renderDrawer(): void {
+    const tile = (testid: string, ic: string, label: string, run: () => void) => {
+      const b = h("button", { class: "tile", type: "button", "data-testid": testid }, h("span", { class: "tile-ic", html: icon(ic, 22) }), h("span", { class: "tile-label" }, label));
+      b.addEventListener("click", () => {
+        this.openDrawer(false);
+        run();
+      });
+      return b;
+    };
+    const group = (title: string, ...tiles: HTMLElement[]) => h("section", { class: "drawer-group" }, h("div", { class: "drawer-k" }, title), h("div", { class: "drawer-grid" }, ...tiles));
+    const v = this.world?.currentView;
+    const here = v?.kind === "stack" ? this.stacks[v.index]?.name : null;
+    this.drawer.replaceChildren(
+      h("div", { class: "drawer-head" }, h("h3", {}, "Ngăn kéo")),
+      group(
+        "ĐI TỚI",
+        tile("room-hall", "home", "Sảnh", () => this.world?.goTo({ kind: "hall" })),
+        tile("room-desk", "book", "Bàn học", () => this.world?.goTo({ kind: "desk" })),
+        tile("h3-board", "calendar", "Bảng ghim", () => this.world?.goTo({ kind: "board" })),
+      ),
+      group(
+        "THƯ VIỆN",
+        tile("h3-import", "plus", here ? `Nhập sách vào “${here}”` : "Nhập sách", () => this.fileInput.click()),
+        tile("h3-list", "list", "Danh sách & quản lý", () => this.deps.onList()),
+      ),
+      group(
+        "TUỲ CHỌN",
+        tile("room-spine", "book", this.spineLabel(), () => this.toggleSpine()),
+        tile("room-tour", "target", "Xem lại hướng dẫn", () => this.startTour()),
+      ),
+    );
   }
 
   // ------------------------------------------------------------ first-visit tour

@@ -108,6 +108,13 @@ async function drawerTile(testid) {
   await page.click(`[data-testid="drawer"] [data-testid="${testid}"]`);
 }
 
+/** v1.6.3: the room's commands live in its drawer (⋯). */
+async function roomTile(testid, pg = page) {
+  if (!(await pg.isVisible('[data-testid="room-drawer"].open'))) await pg.click('[data-testid="h3-more"]');
+  await pg.waitForFunction(() => getComputedStyle(document.querySelector('[data-testid="room-drawer"]')).transform === "none");
+  await pg.click(`[data-testid="room-drawer"] [data-testid="${testid}"]`);
+}
+
 async function backToShelf3d() {
   await reveal();
   await page.click(".tb-back");
@@ -1363,8 +1370,7 @@ test("v1.2: the desk holds 6 at most; dusty books get a reminder", async () => {
     await window.__app.library.meta.update(old, { lastOpenedAt: Date.now() - 20 * 86400000 });
   }, [six, six[2].id]);
   await W(() => window.__world.goTo({ kind: "desk" }, true));
-  await page.click('[data-testid="h3-hall"]');
-  await page.click('[data-testid="h3-list"]');
+  await roomTile("h3-list");
   await page.click('[data-testid="to-3d"]');
   await page.waitForSelector('[data-testid="home3d"][data-ready="1"]');
   await W(() => window.__world.goTo({ kind: "desk" }));
@@ -1390,7 +1396,7 @@ test("v1.2: the desk holds 6 at most; dusty books get a reminder", async () => {
 });
 
 test("v1.3: the pinboard shows the plan; add, tick, goals and events from the room", async () => {
-  await page.click('[data-testid="h3-board"]');
+  await roomTile("h3-board");
   await page.waitForFunction(() => document.querySelector('[data-testid="home3d"]').dataset.view === "board" && window.__world.idle);
   await page.waitForSelector('[data-testid="board-tab-today"]');
   // a task for today
@@ -1464,7 +1470,7 @@ test("v1.4: hall shortcuts; walking between zones goes round the bookcases, neve
     await walk(() => page.click('[data-testid="h3-prev"]'));
     assert.equal(await page.getAttribute('[data-testid="home3d"]', "data-view"), "stack:0");
   }
-  await walk(() => page.click('[data-testid="h3-board"]'));
+  await walk(() => roomTile("h3-board"));
   assert.ok(await page.isHidden('[data-testid="h3-strip"]'), "no shortcuts over the board panel");
   await walk(() => page.click('[data-testid="h3-hall"]'));
 });
@@ -1513,7 +1519,7 @@ test("v1.6.1: every stack is seen from a clear aisle; leaving one turns the view
   await p.evaluate(() => window.__world.goTo({ kind: "stack", index: 1 }, true));
   await p.waitForTimeout(300);
   await p.screenshot({ path: `${SHOTS}/62-stack-2.png` });
-  // v1.6.2: the ⋯ button toggles its menu with real taps (a second tap closes it, and it stays closed)
+  // v1.6.2/1.6.3: ⋯ toggles the room's drawer with real taps (a second tap closes it, and it stays closed)
   const more = await p.locator('[data-testid="h3-more"]').boundingBox();
   const tc = await ctx.newCDPSession(p);
   const tap = async () => {
@@ -1523,11 +1529,14 @@ test("v1.6.1: every stack is seen from a clear aisle; leaving one turns the view
     await p.waitForTimeout(450);
   };
   await tap();
-  assert.equal(await p.locator(".menu").count(), 1, "first tap opens");
+  const open = () => p.locator('[data-testid="room-drawer"].open').count();
+  assert.equal(await open(), 1, "first tap opens");
+  await p.waitForTimeout(200);
+  await p.screenshot({ path: `${SHOTS}/63-room-drawer.png` });
   await tap();
-  assert.equal(await p.locator(".menu").count(), 0, "second tap closes it, and it stays closed");
+  assert.equal(await open(), 0, "second tap closes it, and it stays closed");
   await tap();
-  assert.equal(await p.locator(".menu").count(), 1, "third tap opens it again");
+  assert.equal(await open(), 1, "third tap opens it again");
   await p.mouse.click(640, 700);
   await ctx.close();
 });
@@ -1606,8 +1615,7 @@ test("v1.4: first visit: a short tour walks through the room once, and can be re
   await p.waitForSelector('[data-testid="home3d"][data-ready="1"]', { timeout: 60000 });
   assert.equal(await p.locator('[data-testid="tour"]').count(), 0);
   // replay from the menu, then skip
-  await p.click('[data-testid="h3-more"]');
-  await p.click("text=Xem lại hướng dẫn");
+  await roomTile("room-tour", p);
   await p.waitForSelector('[data-testid="tour"]');
   await p.click('[data-testid="tour-skip"]');
   assert.equal(await p.locator('[data-testid="tour"]').count(), 0);
@@ -1632,7 +1640,7 @@ test("v1.1: favourite from the pulled-out book; import lands on the stack you st
   await page.waitForTimeout(1500);
   assert.equal(await W(() => window.__world.info().books), n0, "both already on a shelf: duplicates are not added twice");
   // back to the list view for the remaining tests
-  await page.click('[data-testid="h3-list"]');
+  await roomTile("h3-list");
   await page.waitForSelector('[data-testid="book-card"]');
   assert.equal(await W(() => localStorage.getItem("vl.home")), "list");
 });

@@ -1185,3 +1185,22 @@ svg.ic { stroke-width: 1.65; }
 :root[data-theme="night"] .nb-page, :root[data-theme="night"] .nb-header .nb-link, :root[data-theme="night"] .nb-header button { color: #f3e6c8; }
 :root[data-theme="night"] .reader.nb-active .nb-header { background: #33271b; box-shadow: inset 0 -2px 0 var(--accent); }
 .nb-header, .nb-header * { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* v1.6.3 — the room's edge: the name (= the hall), where you are, one ⋯ */
+.h3-bar { height: 46px; padding: 0 8px 0 10px; gap: 6px;
+  background: linear-gradient(rgb(29 20 13 / 0.82), rgb(29 20 13 / 0.6)); border-bottom: 1px solid rgb(184 144 63 / 0.4);
+  box-shadow: 0 2px 14px rgb(0 0 0 / 0.25); backdrop-filter: blur(4px); z-index: 6; }
+.h3-home { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px 0 6px; border: 0; border-radius: 9px; background: transparent; color: #ecdcb8; cursor: pointer; font: inherit; flex: none; }
+.h3-home:hover, .h3-home:active { background: rgb(236 220 184 / 0.1); }
+.h3-home .h3-title { font-size: 21px; }
+.h3-where { font-family: var(--font-display); font-size: 16px; color: #c9b48f; }
+.h3-more { width: 42px; height: 38px; border: 0; border-radius: 9px; background: transparent; color: #ecdcb8; display: grid; place-items: center; cursor: pointer; flex: none; }
+.h3-more:hover, .h3-more[aria-expanded="true"] { background: rgb(236 220 184 / 0.12); }
+/* the drawer opens below the edge so ⋯ stays a toggle */
+.h3-scrim { position: absolute; inset: 46px 0 0 0; z-index: 5; background: rgb(0 0 0 / 0.3); opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.h3-scrim.open { opacity: 1; pointer-events: auto; }
+.h3-drawer { position: absolute; top: 46px; right: 0; bottom: 0; z-index: 5; transform: translateX(105%); }
+.h3-drawer.open { transform: none; }
+.home3d.touring .h3-bar .h3-more { visibility: hidden; }
+@media (max-width: 760px) { .h3-home .h3-title { display: none; } }
+.home3d { overflow: clip; }
