@@ -95,13 +95,26 @@ async function openBook(titlePart) {
   await page.waitForSelector('[data-testid="scroller"]');
 }
 
+/** v1.6: the top edge slides away while reading; bring it back before using it. */
+async function reveal() {
+  await page.evaluate(() => window.__reader?.revealChrome());
+}
+/** v1.6: most reader commands live in the drawer (⋯). */
+async function drawerTile(testid) {
+  await reveal();
+  if (!(await page.isVisible('[data-testid="drawer"].open'))) await page.click('[data-testid="drawer-btn"]');
+  await page.click(`[data-testid="drawer"] [data-testid="${testid}"]`);
+}
+
 async function backToShelf3d() {
+  await reveal();
   await page.click(".tb-back");
   await page.waitForSelector('[data-testid="home3d"][data-ready="1"]');
   await page.waitForTimeout(300);
 }
 
 async function backToShelf() {
+  await reveal();
   await page.click(".tb-back");
   await page.waitForSelector('[data-testid="shelf"]');
 }
@@ -135,6 +148,7 @@ test("opens the 650-page book and renders page 1", async () => {
 });
 
 test("jumps to page 500 by number and keeps DOM small", async () => {
+  await reveal();
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type("500");
   await page.keyboard.press("Enter");
@@ -147,6 +161,7 @@ test("jumps to page 500 by number and keeps DOM small", async () => {
 });
 
 test("landscape page keeps its own shape", async () => {
+  await reveal();
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type("300");
   await page.keyboard.press("Enter");
@@ -156,7 +171,7 @@ test("landscape page keeps its own shape", async () => {
 });
 
 test("table of contents navigates to a chapter", async () => {
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await page.click('.tab[data-tab="outline"]');
   await page.waitForSelector(".outline-item");
   await page.locator(".outline-item", { hasText: "Chương 5" }).click();
@@ -183,7 +198,7 @@ test("thumbnails show the current page and navigate", async () => {
   await target.click();
   await page.waitForFunction((k) => window.__reader.scrollerForTests.currentPage === k, n, { timeout: 5000 });
   await shot("05-thumbs");
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   } catch (e) {
     const diag = await page.evaluate(() => ({
       current: window.__reader?.scrollerForTests.currentPage,
@@ -200,9 +215,9 @@ test("thumbnails show the current page and navigate", async () => {
 });
 
 test("zoom buttons and pinch zoom", async () => {
-  await page.click('[data-testid="zoom-label"]'); // fit width
+  await drawerTile("zoom-fit"); // fit width
   assert.equal(await page.textContent('[data-testid="zoom-label"]'), "100%");
-  await page.click('button[aria-label="Phóng to"]');
+  await drawerTile("zoom-in");
   assert.equal(await page.textContent('[data-testid="zoom-label"]'), "120%");
   const before = await currentPage();
 
@@ -221,10 +236,11 @@ test("zoom buttons and pinch zoom", async () => {
   assert.ok(Math.abs((await currentPage()) - before) <= 1, "pinch keeps you on the same page");
   await page.waitForTimeout(800);
   await shot("06-zoomed");
-  await page.click('[data-testid="zoom-label"]');
+  await drawerTile("zoom-fit");
 });
 
 test("remembers the reading position", async () => {
+  await reveal();
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type("123");
   await page.keyboard.press("Enter");
@@ -287,13 +303,16 @@ const inkPixels = (pageNo) => page.evaluate((n) => {
 }, pageNo);
 const settled = () => page.evaluate(() => window.__reader.inkLayerForTests.settled());
 async function gotoPage(n) {
+  await reveal();
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type(String(n));
   await page.keyboard.press("Enter");
   await waitRendered(n);
 }
 async function tool(name) {
+  if (!(await page.isVisible('[data-testid="pen-tray"].open'))) await page.click('[data-testid="pen-current"]');
   await page.click(`[data-testid="tools"] [data-tool="${name}"]`);
+  await page.click('[data-testid="pen-current"]'); // close the tray again
 }
 
 test("milestone 3: pen writes on the page, finger still scrolls", async () => {
@@ -393,10 +412,10 @@ test("v0.3.1: underline sits the same distance under the text wherever the pen i
 });
 
 test("milestone 3: ink stays sharp after zoom and survives reopening", async () => {
-  await page.click('button[aria-label="Phóng to"]');
+  await drawerTile("zoom-in");
   await waitRendered(10);
   assert.ok((await inkPixels(10)) > 50);
-  await page.click('[data-testid="zoom-label"]');
+  await drawerTile("zoom-fit");
   await page.waitForTimeout(1000);
   await backToShelf();
   await openBook("650");
@@ -407,7 +426,7 @@ test("milestone 3: ink stays sharp after zoom and survives reopening", async () 
 
 test("milestone 3: widened margin gives space to write beside the page", async () => {
   const before = await page.locator('.page-slot[data-page="10"]').boundingBox();
-  await page.click('[data-testid="margin-btn"]');
+  await drawerTile("margin-btn");
   await page.locator(".menu-item", { hasText: "Lề phải rộng 30%" }).click();
   await gotoPage(10);
   const after = await page.locator('.page-slot[data-page="10"]').boundingBox();
@@ -417,7 +436,7 @@ test("milestone 3: widened margin gives space to write beside the page", async (
   const margin = s[s.length - 1];
   assert.ok(margin.points[0] > 595, `stroke sits right of the page edge (x=${margin.points[0]})`);
   assert.equal(await page.getAttribute('.page-slot[data-page="10"]', "data-pattern"), "lines");
-  await page.click('[data-testid="margin-btn"]');
+  await drawerTile("margin-btn");
   await page.locator(".menu-item", { hasText: "Nền lề: ô vuông" }).click();
   assert.equal(await page.getAttribute('.page-slot[data-page="10"]', "data-pattern"), "grid");
   await shot("10-margin");
@@ -426,7 +445,7 @@ test("milestone 3: widened margin gives space to write beside the page", async (
   await waitRendered(10);
   const again = await page.locator('.page-slot[data-page="10"]').boundingBox();
   assert.ok(again.width / again.height > 0.9, "margin setting remembered");
-  await page.click('[data-testid="margin-btn"]');
+  await drawerTile("margin-btn");
   await page.locator(".menu-item", { hasText: "Không nới lề" }).click();
   await backToShelf();
 });
@@ -434,7 +453,7 @@ test("milestone 3: widened margin gives space to write beside the page", async (
 // ---- milestone 4: export an annotated copy ----
 
 async function exportVia(scopeLabel) {
-  await page.click('[data-testid="export-btn"]');
+  await drawerTile("export-btn");
   await page.waitForSelector('[data-testid="export-dialog"]');
   await page.locator('[data-testid="export-dialog"] .radio', { hasText: scopeLabel }).click();
   const t0 = Date.now();
@@ -529,7 +548,7 @@ test("milestone 5: create a notebook; it grows when you write on the last page",
   assert.equal((await strokesOn(3)).length, 1, "old page 2 moved to page 3");
   // v0.9.2: nothing but writing on the page itself; delete from the page menu (thumbnails).
   assert.equal(await page.locator('.page-slot [data-testid="page-del"]').count(), 0, "no delete button on pages");
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await page.click('.tab[data-tab="thumbs"]');
   await page.click('.thumb[data-page="2"] [data-testid="thumb-more"]');
   await page.locator(".menu-item", { hasText: "Xóa trang 2" }).click();
@@ -554,14 +573,14 @@ test("milestone 5: create a notebook; it grows when you write on the last page",
   await page.locator(".menu-item", { hasText: "Xóa trang 2" }).click();
   await page.locator(".modal .btn", { hasText: "Hủy" }).click();
   assert.equal(await page.textContent('[data-testid="page-total"]'), "/ 3");
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await backToShelf();
   assert.match(await cards().filter({ hasText: "Vở M15" }).textContent(), /Vở · 3 trang/);
 });
 
 test("milestone 5: open the notebook beside a book (split view)", async () => {
   await openBook("650");
-  await page.click('[data-testid="nb-btn"]');
+  await drawerTile("nb-btn");
   await page.locator('[data-testid="nb-choice"]', { hasText: "Vở M15" }).click();
   await page.waitForSelector(`${NB} .page-slot[data-page="1"] canvas`);
   const book = await page.locator(BOOK).boundingBox();
@@ -695,31 +714,31 @@ test("milestone 6: a task opens its book at the planned page", async () => {
 });
 
 test("milestone 6: study timer suggests a break and never forces it", async () => {
-  await page.click('.reader-toolbar [data-testid="timer-chip"]');
+  await drawerTile("drawer-timer");
   await page.click('[data-testid="timer-start"]');
   await page.mouse.click(5, 400); // close the panel
-  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "focus");
+  assert.equal(await page.getAttribute('.reader-edge [data-testid="timer-chip"]', "data-phase"), "focus");
   await page.evaluate(() => window.__app.study.debugAdvance(25 * 60_000));
   await page.waitForSelector('[data-testid="break-suggest"]');
   await shot("18-break-suggest");
   await page.click('[data-testid="plus10"]'); // keep studying 10 more minutes
-  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "focus");
+  assert.equal(await page.getAttribute('.reader-edge [data-testid="timer-chip"]', "data-phase"), "focus");
   await page.evaluate(() => window.__app.study.debugAdvance(10 * 60_000));
   await page.waitForSelector('[data-testid="break-suggest"]');
   await page.click('[data-testid="take-break"]');
-  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "break");
+  assert.equal(await page.getAttribute('.reader-edge [data-testid="timer-chip"]', "data-phase"), "break");
   await page.evaluate(() => window.__app.study.debugAdvance(5 * 60_000));
   await page.waitForSelector('[data-testid="break-over"]');
   await page.locator('[data-testid="break-over"] .btn', { hasText: "Để sau" }).click();
-  assert.equal(await page.getAttribute('.reader-toolbar [data-testid="timer-chip"]', "data-phase"), "idle");
-  await page.click('.reader-toolbar [data-testid="timer-chip"]');
+  assert.equal(await page.getAttribute('.reader-edge [data-testid="timer-chip"]', "data-phase"), "idle");
+  await drawerTile("drawer-timer");
   const total = await page.textContent('[data-testid="today-total"]');
   assert.match(total, /Hôm nay đã học: 3\d phút/, total);
   await page.mouse.click(5, 400);
 });
 
 test("milestone 6: paper tone, dimming and relaxing sound", async () => {
-  await page.click('.reader-toolbar [data-testid="ambience-btn"]');
+  await drawerTile("ambience-btn");
   await page.click('[data-testid="amb-tone"] [data-value="sepia"]');
   assert.equal(await page.evaluate(() => document.body.dataset.tone), "sepia");
   await page.locator('[data-testid="amb-warm"]').fill("0.3");
@@ -734,19 +753,91 @@ test("milestone 6: paper tone, dimming and relaxing sound", async () => {
 });
 
 test("milestone 6: focus mode hides the chrome; back gesture leaves it, not the book", async () => {
-  await page.click('[data-testid="focus-btn"]');
-  await page.waitForSelector('.reader.focus [data-testid="focus-pill"]');
-  assert.equal(await page.isVisible(".reader-toolbar"), false);
+  await drawerTile("focus-btn");
+  await page.waitForSelector(".reader.focus");
+  assert.ok(await page.evaluate(() => document.querySelector(".reader-edge").classList.contains("away")), "the edge is out of the way");
+  assert.ok(await page.isVisible('[data-testid="pencase"]'), "the pen case stays");
   await shot("20-focus");
   await page.goBack(); // Android back gesture
   await page.waitForFunction(() => !document.querySelector(".reader.focus"));
   assert.ok(await page.isVisible('[data-testid="scroller"]'), "still reading");
-  await page.click('[data-testid="focus-btn"]');
+  await drawerTile("focus-btn");
   await page.waitForSelector(".reader.focus");
-  await page.click('[data-testid="focus-exit"]');
+  await drawerTile("focus-btn"); // "Thoát toàn màn hình"
   await page.waitForFunction(() => !document.querySelector(".reader.focus"));
   await page.waitForTimeout(300);
-  assert.ok(await page.isVisible('[data-testid="scroller"]'), "exit button keeps you in the book");
+  assert.ok(await page.isVisible('[data-testid="scroller"]'), "the exit keeps you in the book");
+  await backToShelf();
+});
+
+test("v1.6: paper first: pen case slots, quick wheel, two-finger undo, the edge hides while reading", async () => {
+  await openBook("650");
+  await page.waitForSelector('[data-testid="pencase"]');
+  const inHand = () => page.getAttribute('[data-testid="pen-current"]', "title");
+  // quick slots: tap to take a pen
+  await page.click('[data-testid="pen-slot"][data-slot="2"]');
+  assert.equal(await inHand(), "Dạ quang");
+  await page.click('[data-testid="pen-slot"][data-slot="0"]');
+  assert.equal(await inHand(), "Bút");
+  // hold a slot to keep the pen in hand there: a green highlighter in slot 2
+  await tool("highlighter");
+  await page.click('[data-testid="pen-current"]');
+  await page.click('[data-testid="palette"] [aria-label="Màu #7ee36a"]');
+  await page.click('[data-testid="pen-current"]');
+  const slot2 = await page.locator('[data-testid="pen-slot"][data-slot="1"]').boundingBox();
+  await page.mouse.move(slot2.x + slot2.width / 2, slot2.y + slot2.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(750);
+  await page.mouse.up();
+  assert.match(await page.getAttribute('[data-testid="pen-slot"][data-slot="1"]', "title"), /^Dạ quang/);
+  assert.ok((await page.innerHTML('[data-testid="pen-slot"][data-slot="1"]')).includes("#7ee36a"));
+  // write, then undo with a two-finger tap
+  await page.click('[data-testid="pen-slot"][data-slot="0"]');
+  await gotoPage(12);
+  const p = 12;
+  const before = (await strokesOn(p)).length;
+  await penStroke(p, [[0.2, 0.25], [0.3, 0.27], [0.4, 0.25]]);
+  assert.equal((await strokesOn(p)).length, before + 1);
+  assert.ok(await page.evaluate(() => document.querySelector(".reader-edge").classList.contains("away")), "writing moves the edge away");
+  await page.waitForTimeout(700); // a palm right after the pen is not a gesture
+  const c = await cdp();
+  const box = await page.locator('[data-testid="scroller"]').boundingBox();
+  const cx = box.x + box.width * 0.4, cy = box.y + box.height * 0.5;
+  await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx, y: cy, id: 1 }, { x: cx + 90, y: cy, id: 2 }] });
+  await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForFunction(([n, b]) => window.__reader.inkForTests.strokes(n - 1).length === b, [p, before]);
+  // hold a finger still: the quick wheel; slide to the lower right (Tẩy) and lift
+  await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx, y: cy, id: 3 }] });
+  await page.waitForSelector('[data-testid="quick-wheel"].open');
+  await c.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: cx + 60, y: cy + 60, id: 3 }] });
+  await page.waitForTimeout(150);
+  await shot("60-quick-wheel");
+  await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  assert.equal(await inHand(), "Tẩy");
+  await page.click('[data-testid="pen-slot"][data-slot="0"]');
+  // the edge comes back when you scroll up, and leaves when you scroll on
+  await reveal();
+  const swipe = async (dy) => {
+    await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx, y: cy, id: 5 }] });
+    for (let k = 1; k <= 8; k++) await c.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: cx, y: cy + (dy * k) / 8, id: 5 }] });
+    await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForTimeout(400);
+  };
+  await swipe(-260); // reading on (content moves up)
+  assert.ok(await page.evaluate(() => document.querySelector(".reader-edge").classList.contains("away")), "scrolling on hides the edge");
+  await swipe(200);
+  assert.ok(!(await page.evaluate(() => document.querySelector(".reader-edge").classList.contains("away"))), "scrolling back shows it");
+  // the drawer: find a command by typing
+  await page.click('[data-testid="drawer-btn"]');
+  await page.fill('[data-testid="drawer-find"]', "le");
+  const shown = await page.$$eval('[data-testid="drawer"] .tile:not([hidden]) .tile-label', (l) => l.map((x) => x.textContent));
+  assert.deepEqual(shown, ["Nới rộng lề"]);
+  await page.fill('[data-testid="drawer-find"]', "");
+  await shot("59-drawer");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="drawer"].open'));
+  await page.waitForTimeout(300);
+  await shot("61-reader-v16");
   await backToShelf();
 });
 
@@ -795,21 +886,21 @@ test("v0.6.1: starred books come first and have their own view", async () => {
 test("v0.6.1: bookmark pages and jump back from the list", async () => {
   await openBook("650");
   await gotoPage(42);
-  await page.click('[data-testid="bookmark-btn"]');
+  await drawerTile("bookmark-btn");
   assert.equal(await page.getAttribute('[data-testid="bookmark-btn"]', "aria-pressed"), "true");
   await gotoPage(300);
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await page.click('.tab[data-tab="marks"]');
   await page.locator('[data-testid="marks"] .outline-item', { hasText: "Trang 42" }).click();
   await waitRendered(42);
   assert.equal(await currentPage(), 42);
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await backToShelf();
   await openBook("650");
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await page.click('.tab[data-tab="marks"]');
   assert.equal(await page.locator('[data-testid="marks"] .outline-item').count(), 1, "remembered");
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await backToShelf();
 });
 
@@ -835,7 +926,7 @@ test("v0.6.1: a recurring task comes back after you tick it", async () => {
 // ---- milestone 7: search, broken encodings, OCR ----
 
 async function openSearch() {
-  if (!(await page.isVisible('[data-testid="sidebar"]'))) await page.click(".tb-panel");
+  if (!(await page.isVisible('[data-testid="sidebar"]'))) await drawerTile("tb-panel");
   await page.click('.tab[data-tab="search"]');
 }
 async function searchFor(q) {
@@ -854,7 +945,7 @@ test("milestone 7: search the whole book and jump to the hit", async () => {
   assert.equal(await currentPage(), 123);
   assert.ok(await page.locator('.page-slot[data-page="123"] .search-hit').count() >= 1, "hit outlined on the page");
   await shot("22-search");
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await backToShelf();
 });
 
@@ -870,7 +961,7 @@ test("milestone 7: a PDF with a broken font encoding is repaired, then OCR'd to 
   await searchFor("combustion chamber");
   await page.waitForSelector('[data-testid="search-result"]');
   assert.match(await page.textContent('[data-testid="search-result"]'), /combustion chamber/i);
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await backToShelf();
 });
 
@@ -894,7 +985,7 @@ test("milestone 7: scanned pages are OCR'd in the background, then searchable an
   await page.click('[data-testid="search-result"][data-page="1"]');
   await shot("23-ocr-hit");
   // Highlighter snaps to OCR'd words on the scan.
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await gotoPage(1);
   const hitBox = await page.locator('.page-slot[data-page="1"] .search-hit').first().boundingBox();
   const slot = await page.locator(`${BOOK} .page-slot[data-page="1"]`).boundingBox();
@@ -928,7 +1019,7 @@ test("v0.9.1: pause OCR from the book card, resume later", async () => {
   await openSearch();
   assert.equal(await page.isVisible('[data-testid="ocr-toggle"]'), false, "nothing left to OCR in this book");
   await page.evaluate(() => window.__app.index.setPaused(false));
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await backToShelf();
 });
 
@@ -969,7 +1060,7 @@ test("milestone 8: a .docx is laid out into pages, searchable without OCR, and e
   const p14 = Number(await page.getAttribute('[data-testid="search-result"]', "data-page"));
   assert.ok(p14 >= 2 && p14 < meta.pageCount, "later paragraphs land on later pages");
   await page.click('[data-testid="search-result"]');
-  await page.click(".tb-panel");
+  await drawerTile("tb-panel");
   await waitRendered(p14);
   await shot("26-docx-hit");
   // Highlighter snaps to the Word text.
@@ -1008,7 +1099,7 @@ async function dragClipTo(nbPage, fx, fy) {
 test("clip: frame text in the book, drag it into the notebook as text", async () => {
   await openBook("650");
   if (!(await page.evaluate(() => !!window.__reader.notebookPaneForTests))) {
-    await page.click('[data-testid="nb-btn"]');
+    await drawerTile("nb-btn");
     await page.locator('[data-testid="nb-choice"]', { hasText: "Vở M15" }).click();
   }
   await page.waitForFunction(() => !!window.__reader.notebookPaneForTests);
@@ -1408,6 +1499,7 @@ test("v1.5.1: your own picture in a frame on the wall; kept small; back to the p
 test("v1.5.1: a brass hairline under the title shows where you are in the book", async () => {
   await W(async () => window.__app.open((await window.__app.library.list()).find((b) => b.title.includes("650"))));
   await page.waitForSelector('[data-testid="scroller"]');
+  await reveal();
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type("325");
   await page.keyboard.press("Enter");
@@ -1499,6 +1591,7 @@ test("200 MB file imports and reads smoothly", { skip: !process.env.HEAVY || !ex
   await waitRendered(1, 30000);
   const openMs = Date.now() - t1;
   const t2 = Date.now();
+  await reveal();
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type("100");
   await page.keyboard.press("Enter");

@@ -130,6 +130,19 @@ describe("LibraryService", () => {
     svc = new LibraryService(new MetaStore(), files, inspector);
   });
 
+  it("updates close together never overwrite each other (one transaction each)", async () => {
+    const [r] = await svc.importFiles([pdf("a.pdf")]);
+    if (r.status !== "added") throw new Error("import");
+    const id = r.book.id;
+    // a page count and a reading position saved at the same moment, both fire-and-forget
+    await Promise.all([svc.setPageCount(id, 3), svc.savePosition(id, 7, 1.2), svc.setPageCount(id, 5), svc.setFavorite(id, true)]);
+    const b = await svc.get(id);
+    expect(b?.pageCount).toBe(5);
+    expect(b?.lastPage).toBe(7);
+    expect(b?.zoom).toBe(1.2);
+    expect(b?.favorite).toBe(true);
+  });
+
   it("imports, stores the original and lists it", async () => {
     const [r] = await svc.importFiles([pdf("GAS_TURBINE_fundamental.pdf")]);
     expect(r.status).toBe("added");

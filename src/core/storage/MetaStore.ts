@@ -1,5 +1,5 @@
 import type { BookMeta, Category } from "../types";
-import { STORES, tx, txMulti } from "./idb";
+import { STORES, openDb, tx, txMulti } from "./idb";
 
 /** Fills fields added after v0.1.0 so old records keep working. */
 function normalize(b: BookMeta): BookMeta {
@@ -46,12 +46,28 @@ export class MetaStore {
     });
   }
 
+  /**
+   * Read-modify-write in ONE transaction: two updates close together (the
+   * page count of a notebook and its reading position, say) can no longer
+   * overwrite each other with stale copies.
+   */
   async update(id: string, patch: Partial<BookMeta>): Promise<BookMeta | undefined> {
-    const cur = await this.get(id);
-    if (!cur) return undefined;
-    const next = { ...cur, ...patch, id };
-    await this.put(next);
-    return next;
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction(STORES.books, "readwrite");
+      const s = t.objectStore(STORES.books);
+      let next: BookMeta | undefined;
+      const r = s.get(id);
+      r.onsuccess = () => {
+        const cur = r.result as BookMeta | undefined;
+        if (!cur) return;
+        next = { ...normalize(cur), ...patch, id };
+        s.put(next);
+      };
+      t.oncomplete = () => resolve(next);
+      t.onerror = () => reject(t.error ?? r.error);
+      t.onabort = () => reject(t.error ?? new Error("transaction aborted"));
+    });
   }
 
   async delete(id: string): Promise<void> {

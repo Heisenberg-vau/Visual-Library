@@ -1015,3 +1015,141 @@ svg.ic { stroke-width: 1.65; }
   background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 55%, transparent), #e2c27a); box-shadow: 0 0 6px rgb(226 194 122 / 0.45);
   transition: width 0.35s ease-out; }
 @media (prefers-reduced-motion: reduce) { .rh-progress { transition: none; } }
+
+/* =====================================================================
+   v1.6 — the paper first: a thin edge, a pen case, a quick wheel, a drawer
+   ===================================================================== */
+.reader { position: relative; }
+.reader .pages-scroller > .pages-content { margin-top: 40px; }  /* pages start below the edge */
+.reader .nb-pane { padding-top: 40px; }
+.reader .nb-pane .pages-scroller > .pages-content { margin-top: 0; }
+.reader .sidebar { padding-top: 40px; }
+.page-slot, .page-paper { background-color: #fff; }  /* paper stays white */
+
+/* the thin top edge */
+.reader-edge {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 30; height: 40px; display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--wood-2) 97%, transparent), color-mix(in srgb, var(--wood-2) 90%, transparent));
+  border-bottom: 1px solid color-mix(in srgb, var(--gold) 45%, transparent); box-shadow: 0 2px 10px rgb(20 12 6 / 0.3);
+  color: var(--wood-ink); user-select: none; transition: transform 0.28s ease, opacity 0.28s ease;
+}
+.reader-edge.away { transform: translateY(-100%); opacity: 0; pointer-events: none; }
+.edge-zone { position: absolute; top: 0; left: 0; right: 0; height: 14px; z-index: 29; }
+.edge-btn { width: 40px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: var(--wood-ink); display: grid; place-items: center; cursor: pointer; }
+.edge-btn:hover, .edge-btn:active { background: rgb(236 220 184 / 0.1); }
+.edge-title { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.edge-title .reader-title, .edge-page, .edge-timer {
+  font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: 0.6px; color: var(--wood-ink);
+}
+.edge-title .reader-title { font-variant: small-caps; letter-spacing: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0; }
+.edge-title .rh-orn { color: var(--gold); font-size: 12px; opacity: 0.85; }
+/* page and timer: plain words in the edge, like the title (no pills) */
+.edge-page { display: inline-flex; align-items: baseline; gap: 4px; padding: 0 6px; font-variant-numeric: tabular-nums; cursor: text; }
+.reader-edge .page-input {
+  width: 3.4ch; height: 28px; padding: 0; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent;
+  color: var(--wood-ink); font: inherit; text-align: right; outline: none;
+}
+.reader-edge .page-input:focus { border-bottom-color: var(--gold-2, #e2c27a); background: transparent; outline: none; }
+.reader-edge .page-total { color: var(--wood-soft); min-width: 0; }
+.reader-edge .edge-timer { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font-variant-numeric: tabular-nums; }
+.reader-edge .edge-timer svg { color: var(--gold); }
+.reader-edge .edge-timer[data-phase="idle"] { display: none; }
+.reader-edge .edge-timer:hover { background: rgb(236 220 184 / 0.1); }
+.reader-edge .rh-progress { bottom: -1px; }
+.reader.focus .reader-edge:not(.away) { box-shadow: 0 6px 20px rgb(0 0 0 / 0.45); }
+
+/* the pen case, docked on an edge */
+.pencase {
+  position: absolute; z-index: 28; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 5px;
+  background: linear-gradient(90deg, var(--wood), var(--wood-2)); border: 1px solid color-mix(in srgb, var(--gold) 60%, transparent);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45); transition: opacity 0.25s; color: var(--wood-ink);
+}
+.reader[data-dock="right"] .pencase { right: 0; border-right: 0; border-radius: 16px 0 0 16px; }
+.reader[data-dock="left"] .pencase { left: 0; border-left: 0; border-radius: 0 16px 16px 0; }
+.pencase.drawing { opacity: 0.35; }
+.pc-grip { width: 26px; height: 6px; border-radius: 3px; background: rgb(236 220 184 / 0.25); margin: 2px 0 4px; cursor: grab; touch-action: none; }
+.pc-slot {
+  position: relative; width: 46px; height: 46px; border: 0; border-radius: 12px; display: grid; place-items: center; cursor: pointer;
+  background: rgb(0 0 0 / 0.22); color: var(--wood-ink); box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.45); padding: 0;
+}
+.pc-slot.pc-main { width: 52px; height: 52px; }
+.pc-slot.pc-small { height: 40px; }
+.pc-slot.on, .pc-slot[aria-expanded="true"] { background: color-mix(in srgb, var(--gold) 30%, transparent); box-shadow: inset 0 0 0 1.5px #e2c27a; color: #fff3d6; }
+.pc-slot:disabled { opacity: 0.35; cursor: default; }
+.pc-slot small { position: absolute; top: 2px; left: 5px; font-size: 10px; opacity: 0.6; }
+.pc-dot { position: absolute; right: 6px; bottom: 6px; width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgb(255 255 255 / 0.65); }
+.pc-sep { width: 30px; height: 1px; background: color-mix(in srgb, var(--gold) 40%, transparent); margin: 3px 0; }
+
+.pentray {
+  position: absolute; z-index: 29; top: 50%; width: 300px; padding: 14px; border-radius: 14px;
+  background: #f8f1df; color: #2a1f16; box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 60%, transparent), 0 20px 50px rgb(0 0 0 / 0.45);
+  transform: translateY(-50%) scale(0.96); opacity: 0; pointer-events: none; transition: opacity 0.18s, transform 0.18s;
+}
+.pentray.open { opacity: 1; transform: translateY(-50%) scale(1); pointer-events: auto; }
+.reader[data-dock="right"] .pentray { right: 68px; }
+.reader[data-dock="left"] .pentray { left: 68px; }
+.pt-k { font-family: var(--font-display); font-weight: 700; letter-spacing: 1.5px; font-size: 12px; color: #a8792c; margin: 10px 0 8px; }
+.pt-k:first-child { margin-top: 2px; }
+.pt-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pt-tool { min-height: 56px; border: 1px solid #d3c09a; border-radius: 10px; background: transparent; color: #2a1f16; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 13px; cursor: pointer; }
+.pt-tool span { display: grid; }
+.pt-tool.active { background: #2f4a3c; color: #f3ead2; border-color: #8a7a45; }
+.pt-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.pt-sw { width: 34px; height: 34px; border-radius: 50%; border: 0; cursor: pointer; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.2); }
+.pt-sw.active { box-shadow: 0 0 0 3px #f8f1df, 0 0 0 5px #2f4a3c; }
+.pt-widths { display: flex; gap: 8px; }
+.pt-w { flex: 1; height: 40px; border: 1px solid #d3c09a; border-radius: 9px; background: transparent; display: grid; place-items: center; cursor: pointer; }
+.pt-w span { display: block; width: 60%; background: #2a1f16; border-radius: 3px; }
+.pt-w.active { border-color: #2f4a3c; box-shadow: inset 0 0 0 1px #2f4a3c; }
+.pt-hint { margin: 10px 0 0; font-size: 13px; font-style: italic; color: #6b5843; }
+
+/* the quick wheel */
+.quickwheel { position: fixed; z-index: 70; width: 260px; height: 260px; margin: -130px 0 0 -130px; pointer-events: none; opacity: 0; transform: scale(0.7); transition: opacity 0.12s, transform 0.12s; }
+.quickwheel.open { opacity: 1; transform: scale(1); }
+.qw-seg { fill: rgb(42 27 16 / 0.93); stroke: color-mix(in srgb, var(--gold) 60%, transparent); stroke-width: 1; }
+.qw-seg.hot { fill: #2f4a3c; stroke: #e2c27a; }
+.quickwheel text { fill: #ecdcb8; font-family: var(--font-display); font-size: 13px; text-anchor: middle; }
+.quickwheel .qw-ic { color: #ecdcb8; }
+.qw-hub { fill: rgb(20 12 6 / 0.88); stroke: var(--gold); }
+.quickwheel .qw-hub-t { font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .quickwheel, .pentray, .reader-edge { transition: none; } }
+
+/* a word that appears and fades, like a game HUD */
+.reader-hud { position: absolute; z-index: 27; left: 50%; bottom: 22px; transform: translateX(-50%); padding: 6px 16px; border-radius: 16px; pointer-events: none;
+  background: rgb(20 12 6 / 0.8); color: #ecdcb8; border: 1px solid color-mix(in srgb, var(--gold) 40%, transparent); font-size: 15px; font-variant-numeric: tabular-nums;
+  opacity: 0; transition: opacity 0.3s; }
+.reader-hud.show { opacity: 1; }
+
+/* the drawer */
+.drawer-scrim { position: absolute; inset: 0; z-index: 40; background: rgb(0 0 0 / 0.35); opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.drawer-scrim.open { opacity: 1; pointer-events: auto; }
+.reader-drawer { position: absolute; z-index: 41; top: 0; bottom: 0; width: min(380px, 92vw); overflow: auto; padding: 12px 16px 20px;
+  background: #f8f1df; color: #2a1f16; box-shadow: 0 0 40px rgb(0 0 0 / 0.5); transition: transform 0.25s ease; visibility: hidden; }
+.reader[data-dock="right"] .reader-drawer { right: 0; transform: translateX(105%); }
+.reader[data-dock="left"] .reader-drawer { left: 0; transform: translateX(-105%); }
+.reader-drawer.open { transform: none !important; visibility: visible; }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; }
+.drawer-head h3 { margin: 0; font-family: var(--font-display); font-size: 23px; }
+.drawer-head .edge-btn { color: #6b5843; }
+.drawer-find { width: 100%; height: 42px; margin: 10px 0 2px; padding: 0 12px; border-radius: 10px; border: 1px solid #d3c09a; background: #fffaf0; color: #2a1f16; font: inherit; font-size: 16px; }
+.drawer-k { font-family: var(--font-display); font-weight: 700; letter-spacing: 1.5px; font-size: 12px; color: #a8792c; margin: 14px 0 8px; }
+.drawer-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.reader-drawer .tile { min-height: 66px; padding: 6px 4px; border: 1px solid #d3c09a; border-radius: 10px; background: #fffaf0; color: #2a1f16;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font: inherit; font-size: 13.5px; line-height: 1.15; text-align: center; cursor: pointer; width: auto; height: auto; }
+.reader-drawer .tile:hover { background: #fff; border-color: #b8903f; }
+.reader-drawer .tile[hidden], .drawer-group[hidden] { display: none; }
+.tile-ic { display: grid; color: #2f4a3c; }
+.reader-drawer .tile.marked { border-color: #b8903f; box-shadow: inset 0 0 0 1px #b8903f; }
+.reader-drawer .tile.marked .tile-ic { color: #a8792c; }
+.reader-drawer .tile-big { font-family: var(--font-display); font-size: 19px; font-weight: 700; color: #2f4a3c; min-width: 0; height: auto; }
+/* the pen goes through the edge's empty parts to the page under it; only its controls take touches */
+.reader-edge { pointer-events: none; }
+.reader-edge > button, .reader-edge > label, .reader-edge > .edge-timer { pointer-events: auto; }
+.reader-edge.away > * { pointer-events: none; }
+/* the drawer and tray wait off-screen: never let anything scroll the reader sideways to them */
+.reader { overflow: clip; }
+/* the pages leave room for the pen case: nothing you write on is ever under it */
+.reader[data-dock="right"] .reader-main { margin-right: 62px; }
+.reader[data-dock="left"] .reader-main { margin-left: 62px; }
+.reader[data-dock="left"] .sidebar ~ .reader-main { margin-left: 62px; }
+.edge-title .reader-title { flex: 0 1 auto; min-width: 0; }

@@ -24,6 +24,9 @@ import type { StudySession } from "../study/StudySession";
 import { OutlinePanel } from "./OutlinePanel";
 import { PageScroller } from "./PageScroller";
 import { ThumbnailPanel } from "./ThumbnailPanel";
+import { PenCase, TOOL_ICON, toolName, type PenSlot } from "./PenCase";
+import { QuickWheel } from "./QuickWheel";
+import { applyTheme, currentTheme } from "../theme";
 
 export interface ReaderDeps {
   book: BookMeta;
@@ -62,10 +65,6 @@ export interface NotebookHost {
   saveSplitRatio(r: number): void;
 }
 
-const PEN_COLORS = ["#1d2430", "#1f5fbf", "#d03a2f", "#1e8a4c", "#7b3fb5", "#e07a12"];
-const HL_COLORS = ["#ffd400", "#7ee36a", "#ff8fc7", "#6cc7ff", "#ffa94d"];
-const UL_COLORS = ["#d03a2f", "#1f5fbf", "#1d2430", "#1e8a4c"];
-const PEN_WIDTHS = [1, 1.6, 2.6];
 const MARGIN_PRESETS: { label: string; left: number; right: number }[] = [
   { label: "Không nới lề", left: 0, right: 0 },
   { label: "Lề phải rộng 30%", left: 0, right: 0.3 },
@@ -89,7 +88,7 @@ export class ReaderView {
   private outline: OutlinePanel;
   private scheduler = new JobScheduler(1);
   private pageInput: HTMLInputElement;
-  private zoomLabel: HTMLButtonElement;
+  private zoomLabel: HTMLElement;
   private sidebar: HTMLElement;
   private tabButtons: Record<PanelTab, HTMLButtonElement>;
   private panelOpen = false;
@@ -97,10 +96,19 @@ export class ReaderView {
   private saveTimer = 0;
   private ink: InkLayer;
   private tools: ToolState;
-  private toolButtons = new Map<Tool, HTMLButtonElement>();
-  private colorBtn: HTMLButtonElement;
-  private undoBtn: HTMLButtonElement;
-  private redoBtn: HTMLButtonElement;
+  private pencase: PenCase;
+  private wheel = new QuickWheel();
+  private edge: HTMLElement;
+  private drawer: HTMLElement;
+  private scrim: HTMLElement;
+  private drawerBtn: HTMLButtonElement;
+  private hud: HTMLElement;
+  private hudTimer = 0;
+  /** Recent finger/wheel input: only the user's own scrolling hides the edge. */
+  private userScrollAt = 0;
+  private penAt = 0;
+  private lastScrollTop = 0;
+  private gesture: { start: number; max: number; moved: boolean; x: number; y: number; long: number } | null = null;
   private main: HTMLElement;
   private divider: HTMLElement;
   private nbPane: NotebookPane | null = null;
@@ -115,12 +123,11 @@ export class ReaderView {
   private readonly isNotebook: boolean;
   private chips: { el: HTMLButtonElement; dispose: () => void }[] = [];
   private focusOn = false;
-  private pill: HTMLElement;
-  private pillPage: HTMLElement;
-  private pillTools = new Map<Tool, HTMLButtonElement>();
   private dwellTimer = 0;
   private bookmarks: number[];
   private bookmarkBtn!: HTMLButtonElement;
+  private focusTile!: HTMLButtonElement;
+  private dockTile!: HTMLButtonElement;
   private marksList: HTMLElement;
   private indexer: TextIndexer | null = null;
   private searchPanel: SearchPanel | null = null;
@@ -193,13 +200,7 @@ export class ReaderView {
       this.pageInput.value = String(this.scroller.currentPage);
     });
 
-    this.zoomLabel = h("button", {
-      class: "zoom-label",
-      type: "button",
-      title: "Vừa chiều rộng",
-      "data-testid": "zoom-label",
-      onclick: () => this.scroller.setZoom(1),
-    });
+    this.zoomLabel = h("span", { class: "zoom-label tile-big", "data-testid": "zoom-label" });
 
     const mkTab = (t: PanelTab, label: string) =>
       h("button", { class: "tab", type: "button", "data-tab": t, onclick: () => this.showTab(t) }, label);
@@ -252,121 +253,64 @@ export class ReaderView {
     if (this.isNotebook) {
       this.unsubGrow = autoExtend(doc as NotebookDocument, deps.ink, (n) => this.mainGrown(n));
     }
-    const toolGroup = h("div", { class: "tool-group", "data-testid": "tools" });
-    const toolDefs: [Tool, string, string][] = [
-      ["hand", "hand", "Chỉ đọc (bút cũng cuộn trang)"],
-      ["pen", "pen", "Bút"],
-      ["highlighter", "highlighter", "Bút dạ quang"],
-      ["underline", "underline", "Gạch chân (nét thẳng)"],
-      ["eraser", "eraser", "Tẩy (xóa cả nét)"],
-      ["clip", "scissors", this.isNotebook ? "Di chuyển chữ/hình đã dán" : "Cắt chữ/hình sang vở: dùng bút kéo một khung quanh đoạn cần lấy"],
-    ];
-    for (const [t, ic, label] of toolDefs) {
-      const b = iconButton(ic, label, () => this.setTool(t), "tool-btn");
-      b.dataset.tool = t;
-      this.toolButtons.set(t, b);
-      toolGroup.append(b);
-    }
-    this.colorBtn = h("button", {
-      class: "color-btn",
-      type: "button",
-      title: "Màu và độ dày",
-      "aria-label": "Màu và độ dày",
-      "data-testid": "color-btn",
+    // ---- the pen case (docked on an edge) and the quick wheel
+    this.el = h("div", { class: `reader ${this.isNotebook ? "is-notebook" : ""}` });
+    this.pencase = new PenCase({
+      notebook: this.isNotebook,
+      get: () => this.tools,
+      set: (st) => this.applyTools(st),
+      setTool: (t) => this.setTool(t),
+      undo: () => this.undo(),
+      redo: () => this.redo(),
+      host: this.el,
     });
-    this.colorBtn.addEventListener("click", () => this.openPalette());
-    this.undoBtn = iconButton("undo", "Hoàn tác (Ctrl+Z)", () => this.undo());
-    this.redoBtn = iconButton("redo", "Làm lại (Ctrl+Y)", () => this.redo());
-    this.undoBtn.dataset.testid = "undo";
-    this.redoBtn.dataset.testid = "redo";
-    const marginBtn = iconButton("margin", "Nới rộng lề để ghi chú", () => this.openMargins(marginBtn));
-    marginBtn.dataset.testid = "margin-btn";
-    const exportBtn = iconButton("exportPdf", "Xuất bản có ghi chú (PDF mới)", () => void this.exportPdf());
-    exportBtn.dataset.testid = "export-btn";
-    this.bookmarkBtn = iconButton("bookmark", "Đánh dấu trang này", () => this.toggleBookmark());
-    this.bookmarkBtn.dataset.testid = "bookmark-btn";
-    const nbBtn = iconButton("notebook", "Mở vở ghi chép bên cạnh", () => void this.chooseNotebook(nbBtn));
-    nbBtn.dataset.testid = "nb-btn";
-    toolGroup.append(this.colorBtn, this.undoBtn, this.redoBtn, h("span", { class: "tray-sep", "aria-hidden": "true" }), this.bookmarkBtn);
-    if (!this.isNotebook) toolGroup.append(marginBtn);
-    toolGroup.append(exportBtn);
-    if (!this.isNotebook) toolGroup.append(nbBtn);
 
+    // ---- the thin top edge: back, title, timer when running, page, drawer
     const chip = deps.study.chip();
     this.chips.push(chip);
-    const focusBtn = iconButton("focus", "Chế độ tập trung (toàn màn hình)", () => this.setFocus(true));
-    focusBtn.dataset.testid = "focus-btn";
-    const studyGroup = h("div", { class: "tool-group study-group" }, chip.el, deps.ambience.button(), focusBtn);
-
-    const toolbar = h(
+    chip.el.classList.add("edge-timer");
+    this.drawerBtn = h("button", { class: "edge-btn", type: "button", "data-testid": "drawer-btn", "aria-label": "Ngăn kéo", title: "Ngăn kéo", html: icon("more", 22) });
+    this.drawerBtn.addEventListener("click", () => this.openDrawer(true));
+    this.edge = h(
       "header",
-      { class: "reader-toolbar" },
-      iconButton("back", "Về kệ sách", () => deps.onClose(), "tb-back"),
-      iconButton("panel", "Trang và mục lục", () => this.togglePanel(), "tb-panel"),
-      toolGroup,
-      studyGroup,
+      { class: "reader-edge", "data-testid": "reader-edge" },
+      h("button", { class: "edge-btn tb-back", type: "button", "aria-label": "Về kệ sách", title: "Về kệ sách", html: icon("back", 22), onclick: () => deps.onClose() }),
+      h("div", { class: "edge-title" }, h("span", { class: "rh-orn", "aria-hidden": "true" }, "❦"), h("span", { class: "reader-title", title: book.title }, book.title), h("span", { class: "rh-orn", "aria-hidden": "true" }, "❦")),
+      chip.el,
       h(
-        "div",
-        { class: "page-nav" },
+        "label",
+        { class: "edge-page", title: "Chạm để gõ số trang" },
         this.pageInput,
         (this.totalLabel = h("span", { class: "page-total", "data-testid": "page-total" }, `/ ${doc.numPages}`)),
       ),
-      h(
-        "div",
-        { class: "zoom-group" },
-        iconButton("minus", "Thu nhỏ", () => this.scroller.setZoom(this.scroller.currentZoom / 1.2)),
-        this.zoomLabel,
-        iconButton("plus", "Phóng to", () => this.scroller.setZoom(this.scroller.currentZoom * 1.2)),
-      ),
+      this.drawerBtn,
+      (this.progressLine = h("i", { class: "rh-progress", "data-testid": "read-progress", "aria-hidden": "true" })),
     );
+    const edgeZone = h("div", { class: "edge-zone", "aria-hidden": "true" });
+    edgeZone.addEventListener("pointerdown", () => this.showEdge(true));
+
+    // ---- the drawer: everything else, grouped, with a command filter
+    this.scrim = h("div", { class: "drawer-scrim" });
+    this.scrim.addEventListener("click", () => this.openDrawer(false));
+    this.drawer = this.buildDrawer(deps);
+
+    this.hud = h("div", { class: "reader-hud", "data-testid": "hud", "aria-live": "polite" });
 
     this.divider = h("div", { class: "split-divider", role: "separator", "aria-label": "Kéo để đổi tỉ lệ", "data-testid": "divider" }, h("span"));
     this.divider.addEventListener("pointerdown", this.onDividerDown);
     this.main = h("div", { class: "reader-main" }, this.scroller.el);
-    // Floating mini bar for focus mode.
-    this.pillPage = h("span", { class: "pill-page", "data-testid": "pill-page" });
-    const pillTool = (t: Tool, ic: string, label: string) => {
-      const b = iconButton(ic, label, () => this.setTool(t), "tool-btn");
-      b.dataset.tool = t;
-      this.pillTools.set(t, b);
-      return b;
-    };
-    const pillChip = deps.study.chip();
-    this.chips.push(pillChip);
-    const exitBtn = iconButton("close", "Thoát chế độ tập trung", () => this.setFocus(false));
-    exitBtn.dataset.testid = "focus-exit";
-    this.pill = h(
-      "div",
-      { class: "focus-pill", "data-testid": "focus-pill" },
-      pillTool("hand", "hand", "Chỉ đọc"),
-      pillTool("pen", "pen", "Bút"),
-      pillTool("highlighter", "highlighter", "Dạ quang"),
-      pillTool("eraser", "eraser", "Tẩy"),
-      iconButton("undo", "Hoàn tác", () => this.undo()),
-      h("span", { class: "pill-sep" }),
-      this.pillPage,
-      pillChip.el,
-      deps.ambience.button(),
-      exitBtn,
-    );
+    this.wireGestures();
 
-    this.el = h(
-      "div",
-      { class: `reader ${this.isNotebook ? "is-notebook" : ""}` },
-      toolbar,
-      // the book's title as a running head, like a printed book
-      h(
-        "div",
-        { class: "reader-head" },
-        h("span", { class: "rh-rule" }),
-        h("span", { class: "rh-orn", "aria-hidden": "true" }, "❦"),
-        h("div", { class: "reader-title", title: book.title }, book.title),
-        h("span", { class: "rh-orn", "aria-hidden": "true" }, "❦"),
-        h("span", { class: "rh-rule" }),
-        (this.progressLine = h("i", { class: "rh-progress", "data-testid": "read-progress", "aria-hidden": "true" })),
-      ),
+    this.el.append(
       h("div", { class: "reader-body" }, this.sidebar, this.main),
-      this.pill,
+      this.edge,
+      edgeZone,
+      this.pencase.el,
+      this.pencase.tray,
+      this.hud,
+      this.wheel.el,
+      this.scrim,
+      this.drawer,
     );
     this.setProgressLine(Math.min(book.lastPage, doc.numPages));
     window.addEventListener("popstate", this.onPopState);
@@ -377,6 +321,252 @@ export class ReaderView {
     this.renderTools();
     this.updateHistory();
     document.addEventListener("visibilitychange", this.onHide);
+  }
+
+  // ---- chrome: the top edge, the drawer, the HUD -------------------------
+
+  /** The thin top edge slides away while you read or write; it comes back when you scroll up or touch the top. */
+  showEdge(on: boolean): void {
+    if (!on && (this.drawer?.classList.contains("open") || this.panelOpen || document.activeElement === this.pageInput)) return;
+    this.edge?.classList.toggle("away", !on);
+  }
+
+  /** For tests and the keyboard: bring the top edge back. */
+  revealChrome(): void {
+    this.showEdge(true);
+  }
+
+  private showHud(text: string): void {
+    if (!this.hud) return;
+    this.hud.textContent = text;
+    this.hud.classList.add("show");
+    clearTimeout(this.hudTimer);
+    this.hudTimer = window.setTimeout(() => this.hud.classList.remove("show"), 1100);
+  }
+
+  openDrawer(open: boolean): void {
+    this.drawer.classList.toggle("open", open);
+    this.scrim.classList.toggle("open", open);
+    this.drawerBtn.setAttribute("aria-expanded", String(open));
+    if (open) {
+      this.pencase.openTray(false);
+      this.showEdge(true);
+      const f = this.drawer.querySelector<HTMLInputElement>(".drawer-find");
+      if (f) {
+        f.value = "";
+        this.filterDrawer("");
+      }
+    }
+  }
+
+  private filterDrawer(q: string): void {
+    const norm = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d");
+    const k = norm(q.trim());
+    for (const t of this.drawer.querySelectorAll<HTMLElement>(".tile")) t.hidden = !!k && !norm(`${t.textContent} ${t.dataset.keys ?? ""}`).includes(k);
+    for (const g of this.drawer.querySelectorAll<HTMLElement>(".drawer-group")) g.hidden = ![...g.querySelectorAll<HTMLElement>(".tile")].some((t) => !t.hidden);
+  }
+
+  private buildDrawer(deps: ReaderDeps): HTMLElement {
+    const nb = this.isNotebook;
+    const anchor = () => this.drawerBtn;
+    const tile = (testid: string, ic: string, label: string, keys: string, run: () => void, extraClass = "") => {
+      const b = h("button", { class: `tile ${extraClass}`, type: "button", "data-testid": testid, "data-keys": keys }, h("span", { class: "tile-ic", html: icon(ic, 22) }), h("span", { class: "tile-label" }, label));
+      b.addEventListener("click", () => {
+        this.openDrawer(false);
+        run();
+      });
+      return b;
+    };
+    const group = (title: string, ...tiles: (HTMLElement | null)[]) =>
+      h("section", { class: "drawer-group" }, h("div", { class: "drawer-k" }, title), h("div", { class: "drawer-grid" }, ...tiles.filter((t): t is HTMLElement => !!t)));
+
+    this.bookmarkBtn = tile("bookmark-btn", "bookmark", "Đánh dấu trang", "bookmark danh dau", () => this.toggleBookmark());
+    const panel = tile("tb-panel", "panel", "Mục lục & trang", "muc luc trang thumbnail outline", () => this.togglePanel(), "tb-panel");
+    const search = nb ? null : tile("search-btn", "search", "Tìm trong sách", "tim kiem search", () => {
+      if (!this.panelOpen) this.togglePanel(true);
+      this.showTab("search");
+    });
+    const notebook = nb ? null : tile("nb-btn", "notebook", "Vở bên cạnh", "vo ghi chep notebook song song", () => void this.chooseNotebook(anchor()));
+    const margin = nb ? null : tile("margin-btn", "margin", "Nới rộng lề", "le margin noi rong", () => this.openMargins(anchor()));
+    const exp = tile("export-btn", "exportPdf", "Xuất PDF có ghi chú", "xuat export pdf in", () => void this.exportPdf());
+    const timer = tile("drawer-timer", "timer", "Hẹn giờ học", "gio hen gio dong ho timer hoc nghi", () => void deps.study.openPanel(anchor()));
+    // the ambience button keeps its own panel; it becomes a tile here
+    const amb = deps.ambience.button();
+    amb.className = "tile";
+    amb.dataset.keys = "am thanh mua anh sang am ton giay";
+    amb.innerHTML = `<span class="tile-ic">${icon("sun", 22)}</span><span class="tile-label">Ánh sáng &amp; âm thanh</span>`;
+    amb.addEventListener("click", () => this.openDrawer(false));
+    this.focusTile = tile("focus-btn", "focus", "Toàn màn hình", "toan man hinh tap trung fullscreen focus", () => this.setFocus(!this.focusOn));
+    const zoomOut = tile("zoom-out", "minus", "Thu nhỏ", "thu nho zoom", () => this.scroller.setZoom(this.scroller.currentZoom / 1.2));
+    zoomOut.setAttribute("aria-label", "Thu nhỏ");
+    const fit = h("button", { class: "tile", type: "button", "data-testid": "zoom-fit", "data-keys": "vua kho zoom 100 chieu rong", title: "Vừa chiều rộng" }, this.zoomLabel, h("span", { class: "tile-label" }, "Vừa khổ"));
+    fit.addEventListener("click", () => {
+      this.openDrawer(false);
+      this.scroller.setZoom(1);
+    });
+    const zoomIn = tile("zoom-in", "plus", "Phóng to", "phong to zoom", () => this.scroller.setZoom(this.scroller.currentZoom * 1.2));
+    zoomIn.setAttribute("aria-label", "Phóng to");
+    const theme = tile("theme-btn", "sun", "Giấy da / Ánh nến", "giao dien sang toi dem anh nen giay da theme", () => applyTheme(currentTheme() === "night" ? "day" : "night"));
+    this.dockTile = tile("dock-btn", "hand", "", "hop but tay thuan trai phai canh", () => {
+      this.pencase.setDock(this.pencase.dock === "right" ? "left" : "right");
+      this.renderDockTile();
+    });
+    this.renderDockTile();
+    this.renderFocusTile();
+
+    const find = h("input", { class: "drawer-find", type: "search", placeholder: "Gõ để tìm lệnh… (vd: lề, giờ, xuất)", "aria-label": "Tìm lệnh", "data-testid": "drawer-find" }) as HTMLInputElement;
+    find.addEventListener("input", () => this.filterDrawer(find.value));
+    find.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.drawer.querySelector<HTMLElement>(".tile:not([hidden])")?.click();
+    });
+    return h(
+      "aside",
+      { class: "reader-drawer", "data-testid": "drawer", "aria-label": "Ngăn kéo" },
+      h("div", { class: "drawer-head" }, h("h3", {}, "Ngăn kéo"), h("button", { class: "edge-btn", type: "button", "aria-label": "Đóng", html: icon("close", 20), onclick: () => this.openDrawer(false) })),
+      find,
+      group("ĐỌC", panel, search, this.bookmarkBtn),
+      group("GHI CHÉP", notebook, margin, exp),
+      group("HỌC", timer, amb, this.focusTile),
+      group("HIỂN THỊ", zoomOut, fit, zoomIn, theme, this.dockTile),
+    );
+  }
+
+  private renderFocusTile(): void {
+    const l = this.focusTile?.querySelector(".tile-label");
+    if (l) l.textContent = this.focusOn ? "Thoát toàn màn hình" : "Toàn màn hình";
+  }
+
+  private renderDockTile(): void {
+    const l = this.dockTile?.querySelector(".tile-label");
+    if (l) l.innerHTML = `Hộp bút: cạnh <b>${this.pencase.dock === "left" ? "trái" : "phải"}</b>`;
+  }
+
+  /**
+   * Fingers on the page: hold still to open the quick wheel, tap with two
+   * fingers to undo, three to redo. The pen writes; scrolling is untouched.
+   */
+  private wireGestures(): void {
+    const m = this.main;
+    const fingers = (l: TouchList) => [...l].filter((t) => (t as Touch & { touchType?: string }).touchType !== "stylus");
+    m.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "pen" || (e.pointerType === "mouse" && e.button === 0 && this.tools.tool !== "hand")) {
+        this.penAt = Date.now();
+        if (this.tools.tool !== "hand") {
+          this.showEdge(false);
+          this.pencase.setDrawing(true);
+        }
+      }
+      if (e.pointerType !== "pen") this.userScrollAt = Date.now();
+    });
+    const penUp = (e: PointerEvent) => {
+      if (e.pointerType === "pen" || e.pointerType === "mouse") this.pencase.setDrawing(false);
+    };
+    m.addEventListener("pointerup", penUp);
+    m.addEventListener("pointercancel", penUp);
+    m.addEventListener("wheel", () => (this.userScrollAt = Date.now()), { passive: true });
+    m.addEventListener("contextmenu", (e) => {
+      if ((e as PointerEvent).pointerType !== "mouse") e.preventDefault();
+    });
+    m.addEventListener(
+      "touchstart",
+      (e) => {
+        this.userScrollAt = Date.now();
+        const f = fingers(e.touches);
+        if (!f.length) return;
+        if (!this.gesture || e.touches.length === 1) {
+          if (this.gesture) clearTimeout(this.gesture.long);
+          const t = f[0];
+          this.gesture = { start: Date.now(), max: f.length, moved: false, x: t.clientX, y: t.clientY, long: 0 };
+          if (f.length === 1) {
+            const g = this.gesture;
+            g.long = window.setTimeout(() => {
+              if (this.gesture === g && !g.moved && g.max === 1 && Date.now() - this.penAt > 600) this.openWheel(g.x, g.y);
+            }, 480);
+          }
+        } else {
+          this.gesture.max = Math.max(this.gesture.max, f.length);
+          clearTimeout(this.gesture.long);
+        }
+      },
+      { passive: true },
+    );
+    m.addEventListener(
+      "touchmove",
+      (e) => {
+        const t = fingers(e.touches)[0];
+        if (this.wheel.open) {
+          e.preventDefault(); // the wheel owns this finger: no scrolling
+          if (t) this.wheel.move(t.clientX, t.clientY);
+          return;
+        }
+        const g = this.gesture;
+        if (g && t && Math.hypot(t.clientX - g.x, t.clientY - g.y) > 12) {
+          g.moved = true;
+          clearTimeout(g.long);
+        }
+      },
+      { passive: false },
+    );
+    const end = (e: TouchEvent) => {
+      if (this.wheel.open) {
+        if (e.touches.length === 0) this.closeWheel(e.type === "touchend");
+        return;
+      }
+      const g = this.gesture;
+      if (!g || e.touches.length) return;
+      clearTimeout(g.long);
+      this.gesture = null;
+      if (e.type === "touchend" && !g.moved && g.max >= 2 && Date.now() - g.start < 350 && Date.now() - this.penAt > 600) {
+        if (g.max === 2) {
+          this.undo();
+          this.showHud("Hoàn tác");
+        } else {
+          this.redo();
+          this.showHud("Làm lại");
+        }
+      }
+    };
+    m.addEventListener("touchend", end);
+    m.addEventListener("touchcancel", end);
+    // only the reader's own scrolling hides or brings back the edge
+    this.scroller.el.addEventListener(
+      "scroll",
+      () => {
+        const top = this.scroller.el.scrollTop;
+        const d = top - this.lastScrollTop;
+        this.lastScrollTop = top;
+        if (Date.now() - this.userScrollAt > 800) return;
+        if (d > 8 && top > 60) this.showEdge(false);
+        else if (d < -8) this.showEdge(true);
+      },
+      { passive: true },
+    );
+  }
+
+  private openWheel(x: number, y: number): void {
+    const nb = this.isNotebook;
+    const t = (k: Tool) => ({ key: k, label: toolName(k, nb), icon: TOOL_ICON[k] });
+    this.pencase.openTray(false);
+    this.wheel.show(x, y, [t("pen"), t("highlighter"), t("underline"), t("eraser"), t("clip"), t("hand"), { key: "undo", label: "Hoàn tác", icon: "undo" }, { key: "redo", label: "Làm lại", icon: "redo" }]);
+  }
+
+  private closeWheel(apply: boolean): void {
+    const k = this.wheel.close();
+    this.gesture = null;
+    if (!apply || !k) return;
+    if (k === "undo") return this.undo();
+    if (k === "redo") return this.redo();
+    this.setTool(k as Tool);
+    this.showHud(toolName(k as Tool, this.isNotebook));
+  }
+
+  /** Tests: open the wheel at a point, point towards a slice, lift. */
+  wheelForTests(x: number, y: number, toX: number, toY: number): string | null {
+    this.openWheel(x, y);
+    this.wheel.move(toX, toY);
+    const k = this.wheel.chosen;
+    this.closeWheel(true);
+    return k;
   }
 
   // ---- ink tools ------------------------------------------------------
@@ -391,76 +581,20 @@ export class ReaderView {
     this.deps.onToolsChange(this.tools);
   }
 
-  private currentColor(): string | null {
-    const t = this.tools.tool;
-    return t === "pen" ? this.tools.penColor : t === "highlighter" ? this.tools.hlColor : t === "underline" ? this.tools.ulColor : null;
-  }
-
   private renderTools(): void {
     // Clip frames and resize handles show only while the clip tool is on.
     this.el?.classList.toggle("tool-clip", this.tools.tool === "clip");
-    for (const map of [this.toolButtons, this.pillTools]) {
-      for (const [t, b] of map) {
-        b.classList.toggle("active", t === this.tools.tool);
-        b.setAttribute("aria-pressed", String(t === this.tools.tool));
-      }
-    }
-    const c = this.currentColor();
-    this.colorBtn.hidden = c === null;
-    this.colorBtn.innerHTML = c ? `<span class="color-dot" style="background:${c}"></span>` : "";
+    this.pencase?.render();
   }
 
-  private openPalette(): void {
-    const t = this.tools.tool;
-    if (t !== "pen" && t !== "highlighter" && t !== "underline") return;
-    const colors = t === "pen" ? PEN_COLORS : t === "highlighter" ? HL_COLORS : UL_COLORS;
-    const key = t === "pen" ? "penColor" : t === "highlighter" ? "hlColor" : "ulColor";
-    const backdrop = h("div", { class: "menu-backdrop" });
-    const close = () => backdrop.remove();
-    const pal = h("div", { class: "palette", "data-testid": "palette" }, h("h4", {}, "Màu"));
-    const sw = h("div", { class: "swatches" });
-    for (const col of colors) {
-      const b = h("button", {
-        class: `sw ${this.tools[key] === col ? "active" : ""}`,
-        type: "button",
-        "aria-label": col,
-        style: `background:${col}`,
-      });
-      b.addEventListener("click", () => {
-        this.tools = { ...this.tools, [key]: col };
-        this.renderTools();
-        this.deps.onToolsChange(this.tools);
-        close();
-      });
-      sw.append(b);
+  /** New tool state from the pen case (slot, colour, width). */
+  private applyTools(st: ToolState & { slots?: PenSlot[] }): void {
+    if (st.tool !== this.tools.tool) {
+      this.setTool(st.tool);
     }
-    pal.append(sw);
-    if (t === "pen") {
-      pal.append(h("h4", {}, "Độ dày nét"));
-      const ws = h("div", { class: "widths" });
-      for (const w of PEN_WIDTHS) {
-        const b = h(
-          "button",
-          { class: `wbtn ${this.tools.penWidth === w ? "active" : ""}`, type: "button", "aria-label": `Độ dày ${w}` },
-          h("span", { style: `height:${Math.round(w * 2)}px` }),
-        );
-        b.addEventListener("click", () => {
-          this.tools = { ...this.tools, penWidth: w };
-          this.deps.onToolsChange(this.tools);
-          close();
-        });
-        ws.append(b);
-      }
-      pal.append(ws);
-    }
-    backdrop.addEventListener("pointerdown", (e) => {
-      if (e.target === backdrop) close();
-    });
-    backdrop.append(pal);
-    document.body.append(backdrop);
-    const r = this.colorBtn.getBoundingClientRect();
-    pal.style.top = `${r.bottom + 6}px`;
-    pal.style.left = `${Math.max(8, Math.min(window.innerWidth - pal.offsetWidth - 8, r.left - 100))}px`;
+    this.tools = { ...st };
+    this.renderTools();
+    this.deps.onToolsChange(this.tools);
   }
 
   private openMargins(anchor: HTMLElement): void {
@@ -493,8 +627,9 @@ export class ReaderView {
     if (on === this.focusOn) return;
     this.focusOn = on;
     this.el.classList.toggle("focus", on);
+    this.renderFocusTile();
+    this.showEdge(!on);
     if (on) {
-      this.updatePill();
       // A history entry so the Android back gesture leaves focus mode first.
       history.pushState({ ...(history.state ?? {}), focus: true }, "", location.href);
       document.documentElement.requestFullscreen?.({ navigationUI: "hide" }).catch(() => {});
@@ -518,10 +653,6 @@ export class ReaderView {
     // Leaving full screen with the system gesture also leaves focus mode.
     if (!document.fullscreenElement && this.focusOn && document.fullscreenEnabled) this.setFocus(false);
   };
-
-  private updatePill(): void {
-    this.pillPage.textContent = `${this.scroller.currentPage} / ${this.deps.doc.numPages}`;
-  }
 
   private async exportPdf(): Promise<void> {
     await openExportDialog({
@@ -771,9 +902,7 @@ export class ReaderView {
   }
 
   private updateHistory(): void {
-    if (!this.undoBtn) return;
-    this.undoBtn.disabled = !this.activeInk.canUndo;
-    this.redoBtn.disabled = !this.activeInk.canRedo;
+    this.pencase?.setHistory(this.activeInk.canUndo, this.activeInk.canRedo);
   }
 
   private onHide = (): void => {
@@ -837,11 +966,13 @@ export class ReaderView {
     const on = this.bookmarks.includes(this.scroller.currentPage);
     this.bookmarkBtn.classList.toggle("marked", on);
     this.bookmarkBtn.setAttribute("aria-pressed", String(on));
+    const label = this.bookmarkBtn.querySelector(".tile-label");
+    if (label) label.textContent = on ? "Bỏ đánh dấu" : "Đánh dấu trang";
   }
 
   private renderMarks(): void {
     if (!this.bookmarks.length) {
-      this.marksList.replaceChildren(h("p", { class: "muted pad" }, "Chưa có trang nào được đánh dấu. Bấm nút 🔖 trên thanh công cụ để đánh dấu trang đang đọc."));
+      this.marksList.replaceChildren(h("p", { class: "muted pad" }, "Chưa có trang nào được đánh dấu. Mở ngăn kéo ⋯ và chọn “Đánh dấu trang” để đánh dấu trang đang đọc."));
       return;
     }
     this.marksList.replaceChildren(
@@ -875,7 +1006,7 @@ export class ReaderView {
     this.updateBookmarkBtn();
     this.armDwell(p);
     if (document.activeElement !== this.pageInput) this.pageInput.value = String(p);
-    if (this.focusOn) this.updatePill();
+    if (Date.now() - this.userScrollAt < 800 && this.edge.classList.contains("away")) this.showHud(`Trang ${p} / ${this.deps.doc.numPages}`);
     this.thumbs.setCurrent(p);
     this.setProgressLine(p);
     this.queueSave();
@@ -889,7 +1020,9 @@ export class ReaderView {
   }
 
   private updateZoomLabel(): void {
-    this.zoomLabel.textContent = `${Math.round(this.scroller.currentZoom * 100)}%`;
+    const t = `${Math.round(this.scroller.currentZoom * 100)}%`;
+    if (this.zoomLabel.textContent && this.zoomLabel.textContent !== t) this.showHud(t);
+    this.zoomLabel.textContent = t;
   }
 
   private queueSave(): void {
@@ -903,6 +1036,7 @@ export class ReaderView {
 
   togglePanel(force?: boolean): void {
     this.panelOpen = force ?? !this.panelOpen;
+    if (this.panelOpen) this.showEdge(true);
     this.el.classList.toggle("panel-open", this.panelOpen);
     this.thumbs.setActive(this.panelOpen && this.tab === "thumbs");
     if (this.panelOpen && this.tab === "outline") void this.outline.ensureLoaded();
@@ -922,6 +1056,10 @@ export class ReaderView {
   }
 
   private onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape" && this.drawer.classList.contains("open")) {
+      this.openDrawer(false);
+      return;
+    }
     if (e.target instanceof HTMLInputElement) return;
     if (e.key === "Escape" && this.focusOn) {
       this.setFocus(false);
@@ -951,6 +1089,7 @@ export class ReaderView {
       this.showTab("search");
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g") {
       e.preventDefault();
+      this.showEdge(true);
       this.pageInput.focus();
     }
   };
@@ -958,6 +1097,7 @@ export class ReaderView {
   async destroy(): Promise<void> {
     clearTimeout(this.saveTimer);
     clearTimeout(this.dwellTimer);
+    clearTimeout(this.hudTimer);
     this.deps.index.focus(null);
     this.searchPanel?.destroy();
     this.clipCard?.close();
