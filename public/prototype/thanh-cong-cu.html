@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#2a1b10">
+<title>Bản mẫu · Thanh công cụ gọn</title>
+<style>
+:root {
+  --wood: #3b2719; --wood-2: #2a1b10; --ink: #ecdcb8; --soft: #c9b48f; --gold: #b8903f; --gold-2: #e2c27a;
+  --paper: #fbf7ee; --paper-ink: #2a1f16; --desk-a: #4b3322; --desk-b: #3c2819;
+  --serif: "EB Garamond", "Cormorant Garamond", Georgia, "Times New Roman", serif;
+}
+:root.night { --paper: #e9dfca; --desk-a: #241811; --desk-b: #1c130c; --wood: #140e09; --wood-2: #0e0a06; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--wood-2); color: var(--ink); font-family: var(--serif); }
+button { font: inherit; color: inherit; }
+svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- the desk & pages ---------- */
+#scroller { position: fixed; inset: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 0%, rgb(255 214 150 / 0.12), transparent 70%),
+    repeating-linear-gradient(90deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 7px, rgb(255 225 180 / 0.025) 7px 9px, transparent 9px 19px),
+    repeating-linear-gradient(90deg, transparent 0 158px, rgb(0 0 0 / 0.22) 158px 160px),
+    linear-gradient(90deg, var(--desk-a), var(--desk-b) 22%, var(--desk-a) 47%, var(--desk-b) 71%, var(--desk-a)); }
+#pages { position: absolute; left: 0; right: 0; top: 0; transform-origin: 50% 0; will-change: transform; }
+.page { position: relative; width: min(860px, calc(100vw - 32px)); margin: 18px auto; background: var(--paper); color: var(--paper-ink);
+  aspect-ratio: 1 / 1.3; padding: 7% 9%; box-shadow: 0 0 0 1px rgb(60 40 20 / 0.28), 0 10px 22px rgb(0 0 0 / 0.32), 0 26px 50px -12px rgb(0 0 0 / 0.45); overflow: hidden; }
+.page h2 { font-size: clamp(22px, 3vw, 32px); margin: 0 0 0.6em; font-weight: 600; }
+.page p { font-size: clamp(14px, 1.7vw, 18px); line-height: 1.6; margin: 0 0 0.9em; text-align: justify; }
+.page .folio { position: absolute; bottom: 3%; left: 0; right: 0; text-align: center; font-size: 14px; color: #8a7a62; }
+.page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* ---------- the thin top edge (title + page + drawer) ---------- */
+#bar { position: fixed; left: 0; right: 0; top: 0; z-index: 20; height: 40px; display: flex; align-items: center; gap: 6px; padding: 0 6px;
+  background: linear-gradient(180deg, rgb(42 27 16 / 0.96), rgb(42 27 16 / 0.88)); border-bottom: 1px solid rgb(184 144 63 / 0.45);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.3); transition: transform 0.28s ease, opacity 0.28s; backdrop-filter: blur(6px); }
+#bar.away { transform: translateY(-100%); opacity: 0; pointer-events: none; }
+.bbtn { width: 40px; height: 36px; border: 0; background: transparent; border-radius: 8px; display: grid; place-items: center; cursor: pointer; color: var(--ink); }
+.bbtn:active, .bbtn:hover { background: rgb(236 220 184 / 0.1); }
+#title { flex: 1; min-width: 0; text-align: center; font-variant: small-caps; letter-spacing: 1px; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#title .orn { color: var(--gold); font-size: 12px; margin: 0 8px; }
+#pagechip { height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid rgb(184 144 63 / 0.5); background: rgb(0 0 0 / 0.25); color: var(--ink); cursor: pointer; font-variant-numeric: tabular-nums; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+#timer { width: 22px; height: 22px; }
+#progress { position: absolute; left: 0; bottom: -1px; height: 2px; width: 0; background: linear-gradient(90deg, rgb(184 144 63 / 0.55), var(--gold-2)); box-shadow: 0 0 6px rgb(226 194 122 / 0.45); }
+#edge { position: fixed; left: 0; right: 0; top: 0; height: 22px; z-index: 19; }
+
+/* ---------- the pen case (docked on an edge) ---------- */
+#pencase { position: fixed; z-index: 25; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px;
+  background: linear-gradient(90deg, var(--wood), var(--wood-2)); border: 1px solid rgb(184 144 63 / 0.6); box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  transition: opacity 0.25s, left 0.25s, right 0.25s; touch-action: none; }
+#app[data-dock="right"] #pencase { right: 0; border-right: 0; border-radius: 16px 0 0 16px; }
+#app[data-dock="left"] #pencase { left: 0; border-left: 0; border-radius: 0 16px 16px 0; }
+#pencase.drawing { opacity: 0.35; }
+.grip { width: 26px; height: 6px; border-radius: 3px; background: rgb(236 220 184 / 0.25); margin: 2px 0 4px; cursor: grab; }
+.slot { position: relative; width: 48px; height: 48px; border-radius: 12px; border: 0; background: rgb(0 0 0 / 0.22); display: grid; place-items: center; cursor: pointer; color: var(--ink);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.45); }
+.slot .dot { position: absolute; right: 6px; bottom: 6px; width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgb(255 255 255 / 0.6); }
+.slot.on { background: color-mix(in srgb, var(--gold) 30%, transparent); box-shadow: inset 0 0 0 1.5px var(--gold-2); color: #fff3d6; }
+.slot.main { width: 54px; height: 54px; }
+.sep { width: 30px; height: 1px; background: rgb(184 144 63 / 0.4); margin: 3px 0; }
+.slot small { position: absolute; top: 2px; left: 5px; font-size: 10px; opacity: 0.6; }
+
+/* tray: opens beside the case */
+#tray { position: fixed; z-index: 26; top: 50%; transform: translateY(-50%) scale(0.96); opacity: 0; pointer-events: none; transition: opacity 0.18s, transform 0.18s;
+  width: 300px; padding: 14px; border-radius: 14px; background: #f8f1df; color: var(--paper-ink); box-shadow: 0 0 0 1px rgb(184 144 63 / 0.6), 0 20px 50px rgb(0 0 0 / 0.45); }
+#tray.open { opacity: 1; transform: translateY(-50%) scale(1); pointer-events: auto; }
+#app[data-dock="right"] #tray { right: 74px; }
+#app[data-dock="left"] #tray { left: 74px; }
+.k { font-weight: 700; letter-spacing: 1.5px; font-size: 12px; color: #a8792c; margin: 4px 0 8px; }
+.tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tool { border: 1px solid #d3c09a; background: transparent; border-radius: 10px; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; font-size: 13px; color: var(--paper-ink); }
+.tool.on { background: #2f4a3c; color: #f3ead2; border-color: #8a7a45; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.sw { width: 34px; height: 34px; border-radius: 50%; border: 0; cursor: pointer; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.2); }
+.sw.on { box-shadow: 0 0 0 3px #f8f1df, 0 0 0 5px #2f4a3c; }
+.row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.row input[type=range] { flex: 1; accent-color: #2f4a3c; }
+.pbtn { border: 1px solid #8a7a45; background: #2f4a3c; color: #f3ead2; border-radius: 9px; min-height: 40px; padding: 0 12px; cursor: pointer; }
+.gbtn { border: 1px solid #d3c09a; background: transparent; color: var(--paper-ink); border-radius: 9px; min-height: 40px; padding: 0 12px; cursor: pointer; }
+.hint { font-size: 13px; color: #6b5843; font-style: italic; margin: 8px 0 0; }
+
+/* ---------- quick wheel (game-style) ---------- */
+#wheel { position: fixed; z-index: 40; width: 260px; height: 260px; margin: -130px 0 0 -130px; pointer-events: none; opacity: 0; transform: scale(0.7); transition: opacity 0.12s, transform 0.12s; }
+#wheel.open { opacity: 1; transform: scale(1); }
+#wheel .seg { fill: rgb(42 27 16 / 0.92); stroke: rgb(184 144 63 / 0.6); stroke-width: 1; }
+#wheel .seg.hot { fill: #2f4a3c; stroke: var(--gold-2); }
+#wheel text { fill: var(--ink); font-family: var(--serif); font-size: 13px; text-anchor: middle; }
+#wheel .hub { fill: rgb(20 12 6 / 0.85); stroke: var(--gold); }
+
+/* ---------- transient HUD ---------- */
+#hud { position: fixed; z-index: 15; left: 50%; bottom: 22px; transform: translateX(-50%); padding: 6px 16px; border-radius: 16px; background: rgb(20 12 6 / 0.78); color: var(--ink);
+  border: 1px solid rgb(184 144 63 / 0.4); font-size: 15px; opacity: 0; transition: opacity 0.3s; pointer-events: none; font-variant-numeric: tabular-nums; }
+#hud.show { opacity: 1; }
+#toast { position: fixed; z-index: 60; left: 50%; top: 56px; transform: translateX(-50%); padding: 8px 16px; border-radius: 10px; background: var(--wood); border: 1px solid rgb(184 144 63 / 0.5);
+  color: var(--ink); opacity: 0; transition: opacity 0.25s; pointer-events: none; max-width: 90vw; text-align: center; }
+#toast.show { opacity: 1; }
+
+/* ---------- the drawer ---------- */
+#scrim { position: fixed; inset: 0; z-index: 44; background: rgb(0 0 0 / 0.35); opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+#scrim.open { opacity: 1; pointer-events: auto; }
+#drawer { position: fixed; z-index: 45; top: 0; bottom: 0; width: min(380px, 92vw); background: #f8f1df; color: var(--paper-ink); padding: 14px 16px; overflow: auto;
+  box-shadow: 0 0 40px rgb(0 0 0 / 0.5); transition: transform 0.25s ease; }
+#app[data-dock="right"] #drawer { right: 0; transform: translateX(105%); }
+#app[data-dock="left"] #drawer { left: 0; transform: translateX(-105%); }
+#drawer.open { transform: none !important; }
+#drawer h3 { margin: 0; font-size: 22px; }
+#cmd { width: 100%; margin: 10px 0 4px; height: 42px; border-radius: 10px; border: 1px solid #d3c09a; background: #fffaf0; padding: 0 12px; font: inherit; font-size: 16px; color: var(--paper-ink); }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tile { border: 1px solid #d3c09a; background: #fffaf0; border-radius: 10px; min-height: 64px; padding: 6px 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  cursor: pointer; font-size: 13px; line-height: 1.15; color: var(--paper-ink); text-align: center; }
+.tile svg.i { width: 22px; height: 22px; color: #2f4a3c; }
+.tile.hide { display: none; }
+
+/* ---------- try-it list ---------- */
+#tryit { position: fixed; z-index: 30; bottom: 14px; width: 310px; background: #f8f1df; color: var(--paper-ink); border-radius: 12px; padding: 10px 14px 12px;
+  box-shadow: 0 0 0 1px rgb(184 144 63 / 0.6), 0 14px 34px rgb(0 0 0 / 0.45); font-size: 14.5px; }
+#app[data-dock="right"] #tryit { left: 14px; }
+#app[data-dock="left"] #tryit { right: 14px; }
+#tryit.min ol, #tryit.min .hint { display: none; }
+#tryit ol { margin: 6px 0 0; padding-left: 20px; }
+#tryit li { margin: 3px 0; }
+#tryit li.done { color: #2f6a3c; text-decoration: line-through; }
+#tryit .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 700; }
+#tryit .head button { border: 0; background: transparent; cursor: pointer; font-size: 14px; color: #6b5843; min-height: 32px; }
+</style>
+</head>
+<body>
+<div id="app" data-dock="right">
+  <div id="scroller"><div id="pages"></div></div>
+
+  <div id="edge" aria-hidden="true"></div>
+  <header id="bar">
+    <button class="bbtn" id="back" aria-label="Về thư viện"><svg class="i" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div id="title"><span class="orn">❦</span>Động cơ tua-bin khí – Tập 1<span class="orn">❦</span></div>
+    <button id="pagechip" aria-label="Đi tới trang"><svg id="timer" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="rgb(236 220 184 / 0.25)" stroke-width="2.5"/><circle id="timerArc" cx="12" cy="12" r="9" fill="none" stroke="#e2c27a" stroke-width="2.5" stroke-dasharray="56.5" stroke-dashoffset="20" transform="rotate(-90 12 12)" stroke-linecap="round"/></svg><span id="pageno">1 / 12</span></button>
+    <button class="bbtn" id="more" aria-label="Ngăn kéo"><svg class="i" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
+    <i id="progress"></i>
+  </header>
+
+  <aside id="pencase" aria-label="Hộp bút">
+    <div class="grip" id="grip" title="Kéo để dời hộp bút sang cạnh khác"></div>
+    <button class="slot main" id="current" aria-label="Bút đang dùng – chạm để mở hộp"></button>
+    <div class="sep"></div>
+    <button class="slot" data-slot="0"><small>1</small></button>
+    <button class="slot" data-slot="1"><small>2</small></button>
+    <button class="slot" data-slot="2"><small>3</small></button>
+    <div class="sep"></div>
+    <button class="slot" id="undo" aria-label="Hoàn tác"><svg class="i" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-3"/></svg></button>
+  </aside>
+
+  <div id="tray" role="dialog" aria-label="Hộp bút">
+    <div class="k">CÔNG CỤ</div>
+    <div class="tools" id="tools"></div>
+    <div class="k" style="margin-top:12px">MÀU</div>
+    <div class="swatches" id="swatches"></div>
+    <div class="row"><span style="font-size:13px">Nét</span><input type="range" id="size" min="1" max="10" step="0.5"><span id="sizev" style="width:28px;font-size:13px"></span></div>
+    <div class="row"><button class="gbtn" id="redo">Làm lại</button><span style="flex:1"></span><span class="hint" style="margin:0">Giữ ô 1·2·3 để lưu bút này vào</span></div>
+  </div>
+
+  <svg id="wheel" viewBox="-130 -130 260 260" aria-hidden="true"></svg>
+  <div id="hud"></div>
+  <div id="toast"></div>
+
+  <div id="scrim"></div>
+  <aside id="drawer" aria-label="Ngăn kéo">
+    <h3>Ngăn kéo</h3>
+    <input id="cmd" placeholder="Gõ để tìm lệnh… (vd: lề, giờ, xuất)" autocomplete="off">
+    <div class="k" style="margin-top:12px">ĐỌC</div>
+    <div class="grid">
+      <button class="tile" data-k="mục lục trang"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Mục lục &amp; trang</button>
+      <button class="tile" data-k="tìm kiếm"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>Tìm trong sách</button>
+      <button class="tile" data-k="đánh dấu bookmark"><svg class="i" viewBox="0 0 24 24"><path d="M7 4h10v16l-5-4-5 4z"/></svg>Đánh dấu trang</button>
+    </div>
+    <div class="k" style="margin-top:14px">GHI CHÉP</div>
+    <div class="grid">
+      <button class="tile" data-k="vở song song notebook"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="4" width="8" height="16" rx="1"/></svg>Vở bên cạnh</button>
+      <button class="tile" data-k="lề nới rộng margin"><svg class="i" viewBox="0 0 24 24"><rect x="7" y="4" width="10" height="16"/><path d="M3 8v8M21 8v8"/></svg>Nới rộng lề</button>
+      <button class="tile" data-k="xuất pdf export"><svg class="i" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Xuất PDF</button>
+    </div>
+    <div class="k" style="margin-top:14px">HỌC</div>
+    <div class="grid">
+      <button class="tile" data-k="giờ hẹn giờ timer học"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 9v4l2 2M10 3h4"/></svg>Hẹn giờ học</button>
+      <button class="tile" data-k="âm thanh mưa nền"><svg class="i" viewBox="0 0 24 24"><path d="M5 10v4M9 7v10M13 4v16M17 8v8M21 11v2"/></svg>Âm thanh nền</button>
+      <button class="tile" id="fs" data-k="toàn màn hình fullscreen tập trung"><svg class="i" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Toàn màn hình</button>
+    </div>
+    <div class="k" style="margin-top:14px">HIỂN THỊ</div>
+    <div class="grid">
+      <button class="tile" id="zoomout" data-k="thu nhỏ zoom"><svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/></svg>Thu nhỏ</button>
+      <button class="tile" id="zoomreset" data-k="vừa khổ zoom"><span id="zoomv" style="font-size:18px">100%</span>Vừa khổ</button>
+      <button class="tile" id="zoomin" data-k="phóng to zoom"><svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>Phóng to</button>
+      <button class="tile" id="theme" data-k="giấy da ánh nến tối sáng"><svg class="i" viewBox="0 0 24 24"><path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>Giấy da / Ánh nến</button>
+      <button class="tile" id="hand" data-k="tay thuận trái phải hộp bút"><svg class="i" viewBox="0 0 24 24"><path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8a6 6 0 01-6 6h-1a6 6 0 01-5-3l-2-4a1.5 1.5 0 012.6-1.5L8 13"/></svg>Hộp bút: cạnh <b id="handv">phải</b></button>
+      <button class="tile" id="reset" data-k="đặt lại xóa nét"><svg class="i" viewBox="0 0 24 24"><path d="M4 4v6h6"/><path d="M5 10a8 8 0 112 6"/></svg>Xóa nét thử</button>
+    </div>
+    <p class="hint">Bản mẫu: các ô Mục lục, Tìm, Vở, Lề, Xuất, Hẹn giờ, Âm thanh chỉ để xem vị trí; Thu/phóng, Giấy da/Ánh nến, Toàn màn hình, cạnh hộp bút thì chạy thật.</p>
+  </aside>
+
+  <section id="tryit">
+    <div class="head"><span id="tryhead">Thử 0/8</span><button id="trymin">Thu gọn</button></div>
+    <ol id="trylist"></ol>
+    <p class="hint">Bản mẫu chỉ để cảm nhận thanh công cụ – không đụng vào sách hay ghi chú thật của bạn.</p>
+  </section>
+</div>
+
+<script>
+(() => {
+"use strict";
+const $ = (s) => document.querySelector(s);
+const app = $("#app"), scroller = $("#scroller"), pagesEl = $("#pages"), bar = $("#bar"), pencase = $("#pencase"), tray = $("#tray"), wheel = $("#wheel"), hud = $("#hud"), toastEl = $("#toast"), drawer = $("#drawer"), scrim = $("#scrim");
+const N = 12;
+
+// ---------------------------------------------------------------- content (original text)
+const paras = [
+  "Động cơ tua-bin khí làm việc theo chu trình Brayton: không khí được hút vào, nén lại, trộn với nhiên liệu và đốt cháy ở áp suất gần như không đổi, rồi giãn nở qua tua-bin trước khi thoát ra ngoài qua ống xả.",
+  "Máy nén hướng trục gồm nhiều tầng, mỗi tầng có một dãy cánh quay (rotor) và một dãy cánh tĩnh (stator). Cánh quay truyền năng lượng cho dòng khí; cánh tĩnh đổi hướng dòng khí và biến một phần động năng thành áp suất.",
+  "Buồng đốt phải giữ ngọn lửa ổn định trong một dòng khí chuyển động rất nhanh. Chỉ một phần không khí tham gia đốt cháy; phần còn lại dùng để làm mát vách buồng đốt và hạ nhiệt độ khí trước khi vào tua-bin.",
+  "Tua-bin lấy năng lượng từ dòng khí nóng để quay máy nén và quạt. Cánh tua-bin tầng đầu chịu nhiệt độ cao nhất nên thường được làm mát bằng không khí trích từ máy nén, đi qua các rãnh bên trong cánh.",
+  "Khi đọc sơ đồ dòng khí, hãy theo thứ tự: cửa hút, quạt, máy nén áp thấp, máy nén áp cao, buồng đốt, tua-bin áp cao, tua-bin áp thấp, ống xả. Ghi chú bên lề các trị số áp suất và nhiệt độ ở mỗi trạm sẽ giúp nhớ lâu hơn.",
+];
+for (let i = 0; i < N; i++) {
+  const p = document.createElement("article");
+  p.className = "page";
+  p.dataset.page = String(i);
+  p.innerHTML = `<h2>${i === 0 ? "Chương 1 · Nguyên lý làm việc" : `Mục 1.${i}`}</h2>` +
+    [0, 1, 2, 3, 4].map((k) => `<p>${paras[(i + k) % paras.length]}</p>`).join("") +
+    `<div class="folio">— ${i + 1} —</div><canvas></canvas>`;
+  pagesEl.append(p);
+}
+const pageEls = [...pagesEl.children];
+
+// ---------------------------------------------------------------- try-it checklist
+const tasks = {
+  write: "Viết hoặc gạch bằng bút lên trang",
+  scroll: "Cuộn bằng 1 ngón: thanh trên tự ẩn, kéo ngược lên thì hiện lại",
+  slot: "Đổi bút bằng ô nhanh 1 · 2 · 3 trên hộp bút",
+  tray: "Chạm bút đang dùng để mở hộp bút (màu, nét)",
+  undo2: "Chạm 2 ngón lên trang để hoàn tác",
+  wheel: "Giữ 1 ngón trên trang để mở vòng chọn nhanh, trượt rồi thả",
+  drawer: "Mở ngăn kéo ⋯ (mọi thứ khác nằm ở đây)",
+  fs: "Bật Toàn màn hình trong ngăn kéo",
+};
+const done = new Set();
+function renderTry() {
+  $("#trylist").innerHTML = Object.entries(tasks).map(([k, t]) => `<li class="${done.has(k) ? "done" : ""}">${t}</li>`).join("");
+  $("#tryhead").textContent = `Thử ${done.size}/${Object.keys(tasks).length}`;
+}
+function tick(k) { if (!done.has(k)) { done.add(k); renderTry(); } }
+renderTry();
+$("#trymin").onclick = () => { $("#tryit").classList.toggle("min"); $("#trymin").textContent = $("#tryit").classList.contains("min") ? "Mở" : "Thu gọn"; };
+
+// ---------------------------------------------------------------- feedback
+let toastT, hudT;
+function toast(msg) { toastEl.textContent = msg; toastEl.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove("show"), 1700); }
+function showHud(msg) { hud.textContent = msg; hud.classList.add("show"); clearTimeout(hudT); hudT = setTimeout(() => hud.classList.remove("show"), 1100); }
+
+// ---------------------------------------------------------------- tools
+const ICON = {
+  hand: '<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8a6 6 0 01-6 6h-1a6 6 0 01-5-3l-2-4a1.5 1.5 0 012.6-1.5L8 13"/>',
+  pen: '<path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 7l3 3"/>',
+  highlighter: '<path d="M5 20h6M9 16l-3 3M9 16l8-8-3-3-8 8 3 3z"/><path d="M13 6l3 3"/>',
+  underline: '<path d="M7 4v7a5 5 0 0010 0V4M5 20h14"/>',
+  eraser: '<path d="M4 16l8-8 6 6-6 6H8z"/><path d="M12 20h8"/>',
+  scissors: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8 7.5L20 18M8 16.5L20 6"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 000 10h3"/>',
+};
+const NAMES = { hand: "Chỉ đọc", pen: "Bút", highlighter: "Dạ quang", underline: "Gạch chân", eraser: "Tẩy", scissors: "Kéo cắt" };
+const COLORS = ["#1d2a44", "#2a2a2a", "#b3261e", "#1f5fa8", "#2f7a3c", "#f2d04b", "#9ad0ff", "#f4a7b9"];
+const icon = (k) => `<svg class="i" viewBox="0 0 24 24">${ICON[k]}</svg>`;
+const state = { tool: "pen", color: "#1d2a44", size: 2.2, hl: { color: "#f2d04b", size: 6 }, zoom: 1, scroll: 0 };
+const slots = [
+  { tool: "pen", color: "#1d2a44", size: 2.2 },
+  { tool: "pen", color: "#b3261e", size: 2.2 },
+  { tool: "highlighter", color: "#f2d04b", size: 6 },
+];
+function setTool(t, opts = {}) {
+  state.tool = t;
+  if (opts.color) state.color = opts.color;
+  if (opts.size) state.size = opts.size;
+  if (t === "highlighter" && !opts.color && !["#f2d04b", "#9ad0ff", "#f4a7b9"].includes(state.color)) state.color = "#f2d04b";
+  renderCase();
+  renderTray();
+}
+function renderCase() {
+  const cur = $("#current");
+  cur.innerHTML = icon(state.tool) + (["pen", "highlighter", "underline"].includes(state.tool) ? `<i class="dot" style="background:${state.color}"></i>` : "");
+  cur.title = NAMES[state.tool];
+  document.querySelectorAll("[data-slot]").forEach((b) => {
+    const s = slots[+b.dataset.slot];
+    b.innerHTML = `<small>${+b.dataset.slot + 1}</small>${icon(s.tool)}<i class="dot" style="background:${s.color}"></i>`;
+    b.classList.toggle("on", s.tool === state.tool && s.color === state.color);
+    b.title = `${NAMES[s.tool]} – giữ để lưu bút hiện tại vào ô này`;
+  });
+}
+function renderTray() {
+  $("#tools").innerHTML = Object.keys(NAMES).map((t) => `<button class="tool ${t === state.tool ? "on" : ""}" data-t="${t}">${icon(t)}${NAMES[t]}</button>`).join("");
+  $("#swatches").innerHTML = COLORS.map((c) => `<button class="sw ${c === state.color ? "on" : ""}" data-c="${c}" style="background:${c}" aria-label="Màu ${c}"></button>`).join("");
+  $("#size").value = state.size;
+  $("#sizev").textContent = state.size;
+}
+$("#tools").onclick = (e) => { const b = e.target.closest("[data-t]"); if (b) setTool(b.dataset.t); };
+$("#swatches").onclick = (e) => { const b = e.target.closest("[data-c]"); if (b) { state.color = b.dataset.c; if (["hand", "eraser", "scissors"].includes(state.tool)) state.tool = "pen"; renderCase(); renderTray(); } };
+$("#size").oninput = (e) => { state.size = +e.target.value; $("#sizev").textContent = state.size; };
+function openTray(open) { tray.classList.toggle("open", open); if (open) tick("tray"); }
+$("#current").onclick = () => openTray(!tray.classList.contains("open"));
+// quick slots: tap = use, hold = save the current pen into it
+document.querySelectorAll("[data-slot]").forEach((b) => {
+  let t = 0, held = false;
+  b.addEventListener("pointerdown", () => { held = false; t = setTimeout(() => { held = true; const i = +b.dataset.slot; slots[i] = { tool: state.tool, color: state.color, size: state.size }; renderCase(); toast(`Đã lưu ${NAMES[state.tool].toLowerCase()} này vào ô ${i + 1}`); }, 550); });
+  b.addEventListener("pointerup", () => { clearTimeout(t); if (!held) { const s = slots[+b.dataset.slot]; setTool(s.tool, s); tick("slot"); showHud(`${+b.dataset.slot + 1} · ${NAMES[s.tool]}`); } });
+  b.addEventListener("pointerleave", () => clearTimeout(t));
+  b.addEventListener("contextmenu", (e) => e.preventDefault());
+});
+$("#undo").onclick = () => undo();
+$("#redo").onclick = () => redo();
+
+// dock the case on either edge: drag the grip across the screen
+$("#grip").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const move = (ev) => { app.dataset.dock = ev.clientX < innerWidth / 2 ? "left" : "right"; $("#handv").textContent = app.dataset.dock === "left" ? "trái" : "phải"; };
+  const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
+  addEventListener("pointermove", move); addEventListener("pointerup", up);
+});
+$("#hand").onclick = () => { app.dataset.dock = app.dataset.dock === "right" ? "left" : "right"; $("#handv").textContent = app.dataset.dock === "left" ? "trái" : "phải"; };
+
+// ---------------------------------------------------------------- ink (pen and mouse draw; fingers scroll)
+const ink = pageEls.map(() => []);
+const undoStack = [], redoStack = [];
+function fitCanvases() {
+  pageEls.forEach((p, i) => {
+    const c = p.querySelector("canvas");
+    const r = p.getBoundingClientRect();
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    c.width = Math.round((r.width / state.zoom) * dpr);
+    c.height = Math.round((r.height / state.zoom) * dpr);
+    redraw(i);
+  });
+}
+function redraw(i) {
+  const c = pageEls[i].querySelector("canvas");
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  for (const s of ink[i]) drawStroke(ctx, c, s);
+}
+function drawStroke(ctx, c, s) {
+  const W = c.width, H = c.height;
+  ctx.save();
+  ctx.lineCap = s.tool === "highlighter" ? "butt" : "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = s.color;
+  ctx.globalAlpha = s.tool === "highlighter" ? 0.38 : 1;
+  ctx.globalCompositeOperation = s.tool === "highlighter" ? "multiply" : "source-over";
+  ctx.lineWidth = (s.tool === "highlighter" ? s.size * 3.2 : s.size) * (W / 860);
+  ctx.beginPath();
+  s.pts.forEach(([x, y], k) => (k ? ctx.lineTo(x * W, y * H) : ctx.moveTo(x * W, y * H)));
+  ctx.stroke();
+  ctx.restore();
+}
+function pageAt(x, y) {
+  for (let i = 0; i < pageEls.length; i++) {
+    const r = pageEls[i].getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return { i, r };
+  }
+  return null;
+}
+function undo() {
+  const a = undoStack.pop();
+  if (!a) return toast("Không còn gì để hoàn tác");
+  if (a.type === "add") ink[a.page].splice(ink[a.page].indexOf(a.stroke), 1);
+  else ink[a.page].push(a.stroke);
+  redoStack.push(a); redraw(a.page); showHud("Hoàn tác");
+}
+function redo() {
+  const a = redoStack.pop();
+  if (!a) return toast("Không còn gì để làm lại");
+  if (a.type === "add") ink[a.page].push(a.stroke); else ink[a.page].splice(ink[a.page].indexOf(a.stroke), 1);
+  undoStack.push(a); redraw(a.page); showHud("Làm lại");
+}
+function eraseAt(i, fx, fy) {
+  const hit = ink[i].findIndex((s) => s.pts.some(([x, y]) => Math.hypot(x - fx, (y - fy) * 1.3) < 0.02));
+  if (hit >= 0) { const [s] = ink[i].splice(hit, 1); undoStack.push({ type: "erase", page: i, stroke: s }); redoStack.length = 0; redraw(i); }
+}
+
+// ---------------------------------------------------------------- pointer handling
+const touches = new Map();
+let pen = null; // current stroke
+let pan = null; // finger scroll
+let multi = null; // 2–3 finger tap
+let longT = 0, wheelOn = null;
+let vel = 0, lastMoveT = 0, rafMomentum = 0;
+
+function maxScroll() { return Math.max(0, pagesEl.getBoundingClientRect().height - innerHeight + 40); }
+function setScroll(v) {
+  const prev = state.scroll;
+  state.scroll = Math.max(0, Math.min(maxScroll(), v));
+  pagesEl.style.transform = `translateY(${-state.scroll}px) scale(${state.zoom})`;
+  const d = state.scroll - prev;
+  if (d > 6) { if (!bar.classList.contains("away") && state.scroll > 40) { bar.classList.add("away"); } }
+  else if (d < -6) { if (bar.classList.contains("away")) { bar.classList.remove("away"); tick("scroll"); } }
+  updatePage();
+}
+let lastPage = -1;
+function updatePage() {
+  const mid = innerHeight * 0.4;
+  let cur = 0;
+  pageEls.forEach((p, i) => { if (p.getBoundingClientRect().top < mid) cur = i; });
+  $("#progress").style.width = `${((cur / (N - 1)) * 100).toFixed(1)}%`;
+  $("#pageno").textContent = `${cur + 1} / ${N}`;
+  if (cur !== lastPage && lastPage >= 0) showHud(`Trang ${cur + 1} / ${N}`);
+  lastPage = cur;
+}
+
+scroller.addEventListener("pointerdown", (e) => {
+  closePanels();
+  cancelAnimationFrame(rafMomentum);
+  const isPen = e.pointerType === "pen" || (e.pointerType === "mouse" && e.button === 0);
+  // a pen's barrel button or a right click opens the wheel
+  if ((e.pointerType === "pen" && (e.buttons & 2)) || (e.pointerType === "mouse" && e.button === 2)) { openWheel(e.clientX, e.clientY, e.pointerId); return; }
+  if (isPen && state.tool !== "hand") {
+    const hit = pageAt(e.clientX, e.clientY);
+    if (!hit) return;
+    scroller.setPointerCapture(e.pointerId);
+    const fx = (e.clientX - hit.r.left) / hit.r.width, fy = (e.clientY - hit.r.top) / hit.r.height;
+    if (state.tool === "eraser") { pen = { erase: true, page: hit.i }; eraseAt(hit.i, fx, fy); return; }
+    if (state.tool === "scissors") { toast("Kéo cắt: khoanh vùng để cắt sang vở (bản thật đã có)"); return; }
+    pen = { page: hit.i, r: hit.r, stroke: { tool: state.tool === "underline" ? "pen" : state.tool, color: state.color, size: state.tool === "underline" ? 1.6 : state.size, pts: [[fx, fy]] }, underline: state.tool === "underline", y0: fy };
+    ink[hit.i].push(pen.stroke);
+    pencase.classList.add("drawing");
+    bar.classList.add("away");
+    return;
+  }
+  // fingers (and the pen in "hand" mode): scroll, multi-finger taps, long press
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
+  scroller.setPointerCapture(e.pointerId);
+  if (touches.size === 1) {
+    pan = { y: e.clientY, s: state.scroll, moved: false };
+    clearTimeout(longT);
+    longT = setTimeout(() => { if (pan && !pan.moved && touches.size === 1) { pan = null; openWheel(e.clientX, e.clientY, e.pointerId); } }, 480);
+  } else {
+    clearTimeout(longT);
+    pan = null;
+    multi = { n: touches.size, t: performance.now(), moved: false };
+  }
+});
+scroller.addEventListener("pointermove", (e) => {
+  if (wheelOn && e.pointerId === wheelOn.id) return wheelMove(e.clientX, e.clientY);
+  if (pen && !pen.erase) {
+    const fx = (e.clientX - pen.r.left) / pen.r.width, fy = (e.clientY - pen.r.top) / pen.r.height;
+    if (pen.underline) pen.stroke.pts = [pen.stroke.pts[0], [fx, pen.y0]];
+    else pen.stroke.pts.push([fx, fy]);
+    redraw(pen.page);
+    return;
+  }
+  if (pen && pen.erase) {
+    const hit = pageAt(e.clientX, e.clientY);
+    if (hit) eraseAt(hit.i, (e.clientX - hit.r.left) / hit.r.width, (e.clientY - hit.r.top) / hit.r.height);
+    return;
+  }
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  if (Math.hypot(e.clientX - t.x, e.clientY - t.y) > 10) { if (pan) pan.moved = true; if (multi) multi.moved = true; clearTimeout(longT); }
+  if (pan && touches.size === 1) {
+    const now = performance.now();
+    const ny = pan.s - (e.clientY - pan.y);
+    vel = (ny - state.scroll) / Math.max(1, now - lastMoveT);
+    lastMoveT = now;
+    setScroll(ny);
+  }
+});
+function endPointer(e) {
+  if (wheelOn && e.pointerId === wheelOn.id) return wheelEnd();
+  if (pen) {
+    if (!pen.erase && pen.stroke.pts.length > 1) { undoStack.push({ type: "add", page: pen.page, stroke: pen.stroke }); redoStack.length = 0; tick("write"); }
+    else if (!pen.erase) { ink[pen.page].pop(); }
+    pen = null;
+    pencase.classList.remove("drawing");
+    return;
+  }
+  clearTimeout(longT);
+  if (multi && touches.size === multi.n && !multi.moved && performance.now() - multi.t < 350) {
+    if (multi.n === 2) { undo(); tick("undo2"); } else if (multi.n >= 3) redo();
+    multi.done = true;
+  }
+  touches.delete(e.pointerId);
+  if (touches.size === 0) {
+    multi = null;
+    if (pan && pan.moved && Math.abs(vel) > 0.05) momentum();
+    pan = null;
+  }
+}
+scroller.addEventListener("pointerup", endPointer);
+scroller.addEventListener("pointercancel", endPointer);
+scroller.addEventListener("contextmenu", (e) => e.preventDefault());
+scroller.addEventListener("wheel", (e) => { e.preventDefault(); setScroll(state.scroll + e.deltaY); }, { passive: false });
+function momentum() {
+  const step = () => { vel *= 0.95; setScroll(state.scroll + vel * 16); if (Math.abs(vel) > 0.02) rafMomentum = requestAnimationFrame(step); };
+  rafMomentum = requestAnimationFrame(step);
+}
+// the top edge brings the bar back
+$("#edge").addEventListener("pointerdown", () => bar.classList.remove("away"));
+
+// ---------------------------------------------------------------- quick wheel
+const WHEEL = ["pen", "highlighter", "underline", "eraser", "scissors", "hand", "undo", "redo"];
+const WL = { ...NAMES, undo: "Hoàn tác", redo: "Làm lại" };
+function buildWheel(hot = -1) {
+  const n = WHEEL.length, R = 125, r = 44;
+  let s = "";
+  WHEEL.forEach((k, i) => {
+    const a0 = (i / n) * Math.PI * 2 - Math.PI / 2 - Math.PI / n, a1 = a0 + (Math.PI * 2) / n;
+    const p = (rad, a) => `${(rad * Math.cos(a)).toFixed(1)} ${(rad * Math.sin(a)).toFixed(1)}`;
+    s += `<path class="seg ${i === hot ? "hot" : ""}" d="M${p(r, a0)} L${p(R, a0)} A${R} ${R} 0 0 1 ${p(R, a1)} L${p(r, a1)} A${r} ${r} 0 0 0 ${p(r, a0)}Z"/>`;
+    const am = (a0 + a1) / 2, cx = 86 * Math.cos(am), cy = 86 * Math.sin(am);
+    s += `<g transform="translate(${(cx - 11).toFixed(1)} ${(cy - 18).toFixed(1)})" style="color:#ecdcb8"><svg class="i" viewBox="0 0 24 24" width="22" height="22">${ICON[k]}</svg></g>`;
+    s += `<text x="${cx.toFixed(1)}" y="${(cy + 20).toFixed(1)}">${WL[k]}</text>`;
+  });
+  s += `<circle class="hub" r="${r - 6}"/><text y="5" style="font-size:14px">${hot >= 0 ? WL[WHEEL[hot]] : "Trượt để chọn"}</text>`;
+  wheel.innerHTML = s;
+}
+function openWheel(x, y, id) {
+  wheelOn = { x, y, id, hot: -1 };
+  wheel.style.left = `${x}px`; wheel.style.top = `${y}px`;
+  buildWheel(); wheel.classList.add("open");
+  if (navigator.vibrate) navigator.vibrate(8);
+}
+function wheelMove(x, y) {
+  const dx = x - wheelOn.x, dy = y - wheelOn.y;
+  let hot = -1;
+  if (Math.hypot(dx, dy) > 34) {
+    const a = Math.atan2(dy, dx) + Math.PI / 2 + Math.PI / WHEEL.length;
+    hot = Math.floor((((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / ((Math.PI * 2) / WHEEL.length));
+  }
+  if (hot !== wheelOn.hot) { wheelOn.hot = hot; buildWheel(hot); if (hot >= 0 && navigator.vibrate) navigator.vibrate(4); }
+}
+function wheelEnd() {
+  const k = WHEEL[wheelOn.hot];
+  wheel.classList.remove("open");
+  touches.clear(); pan = null;
+  wheelOn = null;
+  if (!k) return;
+  tick("wheel");
+  if (k === "undo") return undo();
+  if (k === "redo") return redo();
+  setTool(k); showHud(NAMES[k]);
+}
+
+// ---------------------------------------------------------------- drawer, page jump, zoom, theme, fullscreen
+function closePanels() { openTray(false); }
+function openDrawer(open) { drawer.classList.toggle("open", open); scrim.classList.toggle("open", open); if (open) { tick("drawer"); openTray(false); } }
+$("#more").onclick = () => openDrawer(true);
+scrim.onclick = () => openDrawer(false);
+$("#cmd").oninput = (e) => {
+  const q = e.target.value.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d");
+  drawer.querySelectorAll(".tile").forEach((t) => {
+    const hay = (t.textContent + " " + (t.dataset.k || "")).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d");
+    t.classList.toggle("hide", !!q && !hay.includes(q));
+  });
+};
+drawer.querySelectorAll(".tile:not([id])").forEach((t) => (t.onclick = () => toast(`“${t.textContent.trim()}” – trong bản thật mở đúng chức năng hiện có`)));
+function setZoom(z) { state.zoom = Math.max(0.6, Math.min(2.2, z)); pagesEl.style.transform = `translateY(${-state.scroll}px) scale(${state.zoom})`; $("#zoomv").textContent = `${Math.round(state.zoom * 100)}%`; showHud(`${Math.round(state.zoom * 100)}%`); }
+$("#zoomin").onclick = () => setZoom(state.zoom * 1.15);
+$("#zoomout").onclick = () => setZoom(state.zoom / 1.15);
+$("#zoomreset").onclick = () => setZoom(1);
+$("#theme").onclick = () => document.documentElement.classList.toggle("night");
+$("#reset").onclick = () => { ink.forEach((a, i) => { a.length = 0; redraw(i); }); undoStack.length = redoStack.length = 0; toast("Đã xóa các nét thử"); };
+$("#fs").onclick = async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+    tick("fs");
+  } catch { toast("Trình duyệt này không cho bật toàn màn hình"); }
+  openDrawer(false);
+};
+$("#pagechip").onclick = () => {
+  const n = prompt(`Đi tới trang (1–${N})`, String(lastPage + 1));
+  const k = parseInt(n || "", 10);
+  if (k >= 1 && k <= N) { const r = pageEls[k - 1].getBoundingClientRect(); setScroll(state.scroll + r.top - 52); }
+};
+$("#back").onclick = () => toast("Về thư viện (trong bản mẫu: không làm gì)");
+
+// ---------------------------------------------------------------- start
+renderCase(); renderTray();
+addEventListener("resize", fitCanvases);
+requestAnimationFrame(() => { fitCanvases(); updatePage(); });
+const mode = matchMedia("(display-mode: standalone)").matches ? "đang chạy như app cài đặt" : "đang chạy trong trình duyệt";
+setTimeout(() => toast(`Bản mẫu thanh công cụ gọn · ${mode}`), 300);
+})();
+</script>
+</body>
+</html>

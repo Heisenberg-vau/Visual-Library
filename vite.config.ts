@@ -41,6 +41,8 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         cleanupOutdatedCaches: true,
         navigateFallback: "index.html",
+        // stand-alone pages (design prototypes) are not the app shell
+        navigateFallbackDenylist: [/\/prototype\//],
       },
     }),
   ],
