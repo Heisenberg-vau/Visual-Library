@@ -227,9 +227,12 @@ test("remembers the reading position", async () => {
   await page.click('[data-testid="page-input"]');
   await page.keyboard.type("123");
   await page.keyboard.press("Enter");
-  await page.waitForTimeout(1000); // debounce save
+  // wait for the (debounced) save itself, not a fixed time: CI machines are slower
+  const saved = () => page.evaluate(async () => (await window.__app.library.list()).find((b) => b.title.includes("650"))?.lastPage);
+  for (let i = 0; i < 60 && (await saved()) !== 123; i++) await page.waitForTimeout(250);
   await backToShelf();
-  assert.match(await cards().filter({ hasText: "650" }).textContent(), /trang 123/i);
+  // the card reads "Đang ở trang 123" or, once pages count as read, "Đã đọc …"; check the stored position
+  assert.equal(await saved(), 123);
   await openBook("650");
   await waitRendered(123);
   assert.equal(await currentPage(), 123);
