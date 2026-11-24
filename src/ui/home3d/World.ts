@@ -2,7 +2,8 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { CELLS_PER_ATLAS, StackChunk, hash, type ShelfBook } from "./stacks";
-import { corkTexture, dustTexture, floorTexture, noteTexture, pagesTexture, plaqueTexture, plasterTexture, slipTexture, spineTexture, woodTexture, type SpineStyle } from "./textures";
+import { bustOnColumn, framedPainting, globe, plant, urnOnPedestal, type PaintingKind } from "./decor";
+import { boardNoteTexture, corkTexture, dustTexture, floorTexture, pagesTexture, type NoteLine, plaqueTexture, plasterTexture, slipTexture, spineTexture, woodTexture, type SpineStyle } from "./textures";
 
 /*
  * The 3D library room: stacks of the user's real books, a study desk and an
@@ -34,6 +35,16 @@ export interface WorldStack {
 }
 export type WorldView = { kind: "hall" } | { kind: "desk" } | { kind: "board" } | { kind: "stack"; index: number };
 
+export type NoteKey = "today" | "week" | "goals" | "events";
+export interface BoardNote {
+  key: NoteKey;
+  title: string;
+  lines: NoteLine[];
+  more: number;
+  /** Red pin (something close or overdue). */
+  alert: boolean;
+}
+
 export interface DeskEntry {
   id: string;
   /** 0 clean … 1 very dusty. */
@@ -48,6 +59,8 @@ export interface WorldEvents {
   onZone?: (zone: "desk" | "board") => boolean;
   /** Tapped a book lying on the desk. */
   onDeskBook?: (id: string) => void;
+  /** Tapped a note on the pinboard. */
+  onNote?: (key: NoteKey) => void;
 }
 
 interface Placed {
@@ -67,7 +80,6 @@ interface Spot {
   fov: number;
 }
 
-const COLORS = ["#6e2a22", "#2f4a3c", "#3b2f5a", "#7a5a22", "#23465e", "#5a2a3a", "#4a3a2a", "#2e5a55", "#6a3d1e", "#36402a"];
 const SHELF_GAP = 0.42;
 const STACK_W = 0.66;
 const STACK_Z = -3.6;
@@ -89,6 +101,7 @@ export class LibraryWorld {
   private stacks: WorldStack[] = [];
   private pulled: Placed | null = null;
   private desk: DeskEntry[] = [];
+  private notes = new Map<NoteKey, { mesh: THREE.Mesh; pin: THREE.Mesh; lines: string[] }>();
   private dustTex: THREE.Texture | null = null;
   private view: WorldView = { kind: "hall" };
   private along = 0;
@@ -367,6 +380,38 @@ export class LibraryWorld {
     (dust.material as THREE.MeshStandardMaterial).opacity = 0.35 + level * 0.6;
   }
 
+  // ------------------------------------------------------------ the pinboard
+
+  /** Writes the planner onto the four notes. */
+  setBoard(notes: BoardNote[]): void {
+    for (const n of notes) {
+      const slot = this.notes.get(n.key);
+      if (!slot) continue;
+      const m = slot.mesh.material as THREE.MeshStandardMaterial;
+      m.map?.dispose();
+      m.map = boardNoteTexture(n.title, n.lines, slot.mesh.userData.paper as string, n.more);
+      m.color.set("#ffffff");
+      m.needsUpdate = true;
+      (slot.pin.material as THREE.MeshStandardMaterial).color.set(n.alert ? "#a2261c" : "#c49a4a");
+      slot.lines = n.lines.map((l) => l.text);
+    }
+    this.kick();
+  }
+
+  /** What a note shows (tests). */
+  noteLines(key: NoteKey): string[] {
+    return this.notes.get(key)?.lines ?? [];
+  }
+
+  /** Screen point of a note's centre (tests). */
+  noteScreenPoint(key: NoteKey): { x: number; y: number } | null {
+    const n = this.notes.get(key);
+    if (!n) return null;
+    const w = n.mesh.getWorldPosition(new THREE.Vector3()).project(this.camera);
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return { x: r.left + ((w.x + 1) / 2) * r.width, y: r.top + ((1 - w.y) / 2) * r.height };
+  }
+
   /** Stop drawing (another screen is shown). */
   pause(): void {
     this.paused = true;
@@ -495,52 +540,41 @@ export class LibraryWorld {
       f.position.set(L + 0.1, 2.3, z);
       g.add(f);
     }
-    // built-in wall shelves along the back (decor, one instanced mesh)
-    const wcW = Math.min(9.2, W - 6);
-    const wcX = 1.2;
-    const wcBack = this.box(wcW, 3.0, 0.04, mat.walnutDark);
-    wcBack.position.set(wcX, 1.5, -7.9);
-    g.add(wcBack);
-    const bays = 8;
-    for (let i = 0; i <= bays; i++) {
-      const post = this.box(0.06, 3.0, 0.4, mat.walnut);
-      post.position.set(wcX - wcW / 2 + (i * wcW) / bays, 1.5, -7.72);
-      g.add(post);
-    }
-    const rows = [0.08, 0.6, 1.12, 1.64, 2.16, 2.68];
-    for (const y of rows) {
-      const sh = this.box(wcW, 0.04, 0.4, mat.walnut);
-      sh.position.set(wcX, y, -7.72);
-      g.add(sh);
-    }
-    const top = this.box(wcW + 0.2, 0.1, 0.48, mat.walnutDark);
-    top.position.set(wcX, 3.03, -7.72);
-    g.add(top);
-    const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.6 }), 1400);
-    const m4 = new THREE.Matrix4();
-    const col = new THREE.Color();
-    let k = 0;
-    let sd = 7;
-    const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
-    for (const y of rows.slice(0, -1)) {
-      let x = wcX - wcW / 2 + 0.06;
-      while (x < wcX + wcW / 2 - 0.08 && k < 1400) {
-        const t = 0.025 + rnd() * 0.05;
-        const h = 0.3 + rnd() * 0.15;
-        if (Math.abs((x - (wcX - wcW / 2)) % (wcW / bays)) < 0.05) {
-          x += 0.06;
-          continue;
-        }
-        m4.makeScale(t, h, 0.24).setPosition(x + t / 2, y + 0.02 + h / 2, -7.72);
-        inst.setMatrixAt(k, m4);
-        inst.setColorAt(k, col.set(COLORS[Math.floor(rnd() * COLORS.length)]).multiplyScalar(0.8 + rnd() * 0.4));
-        k++;
-        x += t + 0.002 + (rnd() < 0.04 ? 0.15 : 0);
-      }
-    }
-    inst.count = k;
-    inst.castShadow = inst.receiveShadow = true;
-    g.add(inst);
+    // back wall: paintings in gilt frames, plants, a bust, an urn and a globe
+    const gold = new THREE.MeshStandardMaterial({ color: "#c9a14e", metalness: 0.85, roughness: 0.38 });
+    gold.userData.shared = false;
+    const paintings: [PaintingKind, number, number, number][] = [
+      ["sunset", -4.6, 1.5, 1.1],
+      ["starry", -1.7, 1.7, 1.25],
+      ["windmill", 1.3, 1.5, 1.1],
+      ["sailboat", 4.1, 1.4, 1.05],
+      ["poppies", 6.9, 1.4, 1.05],
+    ];
+    paintings.forEach(([kind, x, w, h], i) => {
+      if (x > R - 1.2) return;
+      const p = framedPainting(kind, 100 + i * 17, w, h, gold);
+      p.position.set(x, 2.35, -7.98);
+      g.add(p);
+    });
+    const plants: ["fig" | "palm", number][] = [["fig", -6.2], ["palm", 0.0], ["fig", 5.5]];
+    plants.forEach(([kind, x], i) => {
+      if (x > R - 0.6) return;
+      const pl = plant(kind, 7 + i);
+      pl.position.set(x, 0, -7.55);
+      g.add(pl);
+    });
+    const bust = bustOnColumn();
+    bust.position.set(-3.15, 0, -7.6);
+    bust.rotation.y = 0.15;
+    const urn = urnOnPedestal();
+    urn.position.set(2.75, 0, -7.6);
+    g.add(bust, urn);
+    // a palm and a globe near the window corner
+    const palm2 = plant("palm", 21);
+    palm2.position.set(L + 0.7, 0, -6.6);
+    const gl = globe(mat.walnut, mat.brass);
+    gl.position.set(L + 1.0, 0, -1.3);
+    g.add(palm2, gl);
     // pendant lamps
     for (const [x, z] of [[-1.4, -2.9], [STACK_X0 + STACK_DX, -3.6]]) {
       const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 1.2, 6), mat.walnutDark);
@@ -659,22 +693,25 @@ export class LibraryWorld {
       f.position.set(x, y, 0.01);
       tilt.add(f);
     }
-    // Placeholder notes until the pinboard milestone fills them with real plans.
-    const notes: [string, string[], number, number, number, string][] = [
-      ["Hôm nay", ["Việc trong ngày"], -0.34, 0.16, -0.05, "#fbf5e2"],
-      ["Sự kiện", ["Hạn thi, kiểm tra"], 0.3, 0.14, 0.04, "#fbf5e2"],
-      ["Dự định", ["Mục tiêu dài hạn"], -0.22, -0.26, 0.06, "#f3e1b0"],
-      ["Tuần này", ["Kế hoạch tuần"], 0.34, -0.25, -0.03, "#fbf5e2"],
+    // four notes; their content comes from the planner (setBoard)
+    const layout: [NoteKey, number, number, number, string][] = [
+      ["today", -0.33, 0.2, -0.035, "#fbf5e2"],
+      ["events", 0.33, 0.2, 0.03, "#fbf5e2"],
+      ["week", -0.33, -0.24, 0.025, "#fbf5e2"],
+      ["goals", 0.33, -0.24, -0.03, "#f3e1b0"],
     ];
-    for (const [title, lines, x, y, rz, paper] of notes) {
-      const n = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.36), new THREE.MeshStandardMaterial({ map: noteTexture(title, lines, paper), roughness: 0.9 }));
+    for (const [key, x, y, rz, paper] of layout) {
+      const n = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.455), new THREE.MeshStandardMaterial({ roughness: 0.9, color: paper }));
       n.position.set(x, y, 0.02);
       n.rotation.z = rz;
       n.castShadow = true;
+      n.userData.note = key;
+      n.userData.paper = paper;
       tilt.add(n);
-      const pin = new THREE.Mesh(new THREE.SphereGeometry(0.018, 14, 10), new THREE.MeshStandardMaterial({ color: title === "Sự kiện" ? "#a2261c" : "#c49a4a", roughness: 0.3, metalness: 0.3 }));
-      pin.position.set(x, y + 0.15, 0.04);
+      const pin = new THREE.Mesh(new THREE.SphereGeometry(0.018, 14, 10), new THREE.MeshStandardMaterial({ color: "#c49a4a", roughness: 0.3, metalness: 0.3 }));
+      pin.position.set(x, y + 0.2, 0.04);
       tilt.add(pin);
+      this.notes.set(key, { mesh: n, pin, lines: [] });
     }
     g.add(tilt);
     const leg = (x: number, z: number, rx: number, rz: number, len: number) => {
@@ -789,7 +826,7 @@ export class LibraryWorld {
 
   private spotFor(v: WorldView): Spot {
     if (v.kind === "desk") return { pos: new THREE.Vector3(-1.4, 1.55, -1.75), look: new THREE.Vector3(-1.4, 0.78, -2.95), fov: 48 };
-    if (v.kind === "board") return { pos: new THREE.Vector3(-3.55, 1.45, -1.3), look: new THREE.Vector3(-4.4, 1.38, -3.0), fov: 46 };
+    if (v.kind === "board") return { pos: new THREE.Vector3(-3.78, 1.44, -1.72), look: new THREE.Vector3(-4.4, 1.4, -3.0), fov: 46 };
     if (v.kind === "stack") {
       const s = this.stackInfo[v.index];
       if (s) {
@@ -947,6 +984,7 @@ export class LibraryWorld {
         const p = sb ? this.placed.find((x) => x.shelf === sb) : undefined;
         if (p) return this.pull(p);
       }
+      if (o.userData.note && this.view.kind === "board") return this.events.onNote?.(o.userData.note as NoteKey);
       const placed = (o.userData.placed ?? o.parent?.userData.placed) as Placed | undefined;
       if (placed) {
         const onDesk = this.desk.some((d) => d.id === placed.data.id);

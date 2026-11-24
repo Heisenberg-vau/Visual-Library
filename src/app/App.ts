@@ -135,6 +135,14 @@ export class App {
         onFirstImport: () => void requestPersistentStorage(),
         loadDesk: () => this.loadDesk(),
         saveDesk: (d) => this.meta.setSetting("desk", d),
+        loadTasks: () => this.studyStore.listTasks(),
+        putTask: (t) => this.studyStore.putTask(t),
+        editTask: async (t, date, kind) => {
+          // the planner's own dialog, without leaving the room
+          const pv = new PlannerView({ store: this.studyStore, library: this.library, onBack: () => {}, onOpenBook: (id, page) => void this.openAt(id, page) });
+          await pv.refresh();
+          return pv.edit(t, date, kind);
+        },
       });
     }
     this.library.onDelete(async (id) => {

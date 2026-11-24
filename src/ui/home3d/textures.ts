@@ -353,3 +353,83 @@ export function slipTexture(text: string): THREE.CanvasTexture {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+
+export interface NoteLine {
+  text: string;
+  done?: boolean;
+  /** Drawn in red (close deadlines, overdue). */
+  urgent?: boolean;
+  /** Right-aligned extra, e.g. "còn 3 ngày". */
+  right?: string;
+  /** Checkbox in front (tasks). */
+  box?: boolean;
+}
+
+/** A pinned note with real content (pinboard). */
+export function boardNoteTexture(title: string, lines: NoteLine[], paper: string, more = 0): THREE.CanvasTexture {
+  const [c, ctx] = canvas(560, 440);
+  ctx.fillStyle = paper;
+  ctx.fillRect(0, 0, 560, 440);
+  // faint ruled lines
+  ctx.strokeStyle = "rgba(120,140,170,0.18)";
+  for (let y = 108; y < 430; y += 46) {
+    ctx.beginPath();
+    ctx.moveTo(20, y + 12);
+    ctx.lineTo(540, y + 12);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#2a1f16";
+  ctx.font = `700 46px "Cormorant Garamond", Georgia, serif`;
+  ctx.fillText(title, 26, 66);
+  ctx.font = `400 30px "EB Garamond", Georgia, serif`;
+  const fit = (t: string, w: number) => {
+    if (ctx.measureText(t).width <= w) return t;
+    while (t.length > 1 && ctx.measureText(t + "…").width > w) t = t.slice(0, -1);
+    return t + "…";
+  };
+  lines.slice(0, 6).forEach((l, i) => {
+    const y = 116 + i * 46;
+    let x = 26;
+    ctx.fillStyle = l.urgent ? "#8c2b22" : l.done ? "#8a7a62" : "#2a1f16";
+    if (l.box) {
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y - 20, 20, 20);
+      if (l.done) {
+        ctx.beginPath();
+        ctx.moveTo(x + 3, y - 10);
+        ctx.lineTo(x + 9, y - 3);
+        ctx.lineTo(x + 19, y - 19);
+        ctx.stroke();
+      }
+      x += 32;
+    }
+    const rightW = l.right ? ctx.measureText(l.right).width + 16 : 0;
+    const text = fit(l.text, 534 - x - rightW);
+    ctx.fillText(text, x, y);
+    if (l.done) {
+      ctx.fillRect(x, y - 10, ctx.measureText(text).width, 2);
+    }
+    if (l.right) {
+      ctx.textAlign = "right";
+      ctx.font = `${l.urgent ? 600 : 400} 28px "EB Garamond", Georgia, serif`;
+      ctx.fillText(l.right, 534, y);
+      ctx.textAlign = "left";
+      ctx.font = `400 30px "EB Garamond", Georgia, serif`;
+    }
+  });
+  if (!lines.length) {
+    ctx.fillStyle = "#8a7a62";
+    ctx.font = `italic 400 28px "EB Garamond", Georgia, serif`;
+    ctx.fillText("Chưa có gì · chạm để ghim", 26, 130);
+  }
+  if (more > 0) {
+    ctx.fillStyle = "#6b5843";
+    ctx.font = `italic 400 26px "EB Garamond", Georgia, serif`;
+    ctx.fillText(`+ ${more} mục nữa`, 26, 420);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}

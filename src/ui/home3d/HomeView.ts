@@ -5,7 +5,9 @@ import { h, icon } from "../dom";
 import { confirmDialog, popupMenu, toast } from "../feedback";
 import { DESK_MAX, dustLevel, evictionCandidate, idleDays, putOnDesk, removeFromDesk, type DeskItem } from "../../core/desk";
 import type { SpineStyle } from "./textures";
-import { LibraryWorld, type DeskEntry, type WorldBook, type WorldStack, type WorldView } from "./World";
+import { LibraryWorld, type BoardNote, type DeskEntry, type NoteKey, type WorldBook, type WorldStack, type WorldView } from "./World";
+import { boardSections, isOverdue, toggled, type BoardSections, type Task } from "../../core/study/tasks";
+import { addDays, countdown, dayKey, daysBetween, friendlyDay, weekdayName } from "../../core/study/dates";
 
 /*
  * The library as a 3D room (the app's home): stacks built from the user's
@@ -22,6 +24,11 @@ export interface HomeDeps {
   onFirstImport: () => void;
   loadDesk: () => Promise<DeskItem[]>;
   saveDesk: (items: DeskItem[]) => Promise<void>;
+  /** The planner's tasks, shown on the pinboard. */
+  loadTasks: () => Promise<Task[]>;
+  putTask: (t: Task) => Promise<void>;
+  /** The planner's task dialog (create when t = null). True if saved. */
+  editTask: (t: Task | null, date?: string | null, kind?: Task["kind"]) => Promise<boolean>;
 }
 
 const VIEW_KEY = "vl.view";
@@ -41,6 +48,8 @@ export class HomeView {
   private stacks: WorldStack[] = [];
   private busy = false;
   private desk: DeskItem[] = [];
+  private sections: BoardSections | null = null;
+  private note: NoteKey = "today";
 
   /** WebGL may be unavailable (very old devices): then the list view is used. */
   static supported(): boolean {
@@ -83,7 +92,7 @@ export class HomeView {
       this.where,
       h("span", { class: "grow" }),
       btn("Sảnh", "h3-hall", () => this.world?.goTo({ kind: "hall" }), "home"),
-      btn("Bảng ghim", "h3-board", () => this.deps.onPlanner(), "calendar"),
+      btn("Bảng ghim", "h3-board", () => this.world?.goTo({ kind: "board" }), "calendar"),
       btn("Nhập sách", "h3-import", () => this.fileInput.click(), "plus"),
       btn("Danh sách", "h3-list", () => this.deps.onList(), "list"),
       more,
@@ -107,13 +116,9 @@ export class HomeView {
           const b = this.books.get(id);
           if (b) this.deps.onOpen(b);
         },
-        // The pinboard is the planner screen for now.
-        onZone: (z) => {
-          if (z === "board") {
-            this.deps.onPlanner();
-            return true;
-          }
-          return false;
+        onNote: (key) => {
+          this.note = key;
+          this.renderBoard();
         },
       },
       this.spineStyle,
@@ -145,8 +150,10 @@ export class HomeView {
       world.setStacks(this.stacks, this.deskEntries());
       this.restoreView(saved);
     } else world.setDesk(this.deskEntries());
+    await this.loadBoard();
     const v = world.currentView;
     if (v.kind === "desk") this.renderDesk();
+    if (v.kind === "board") this.renderBoard();
     this.el.dataset.ready = "1";
   }
 
@@ -254,6 +261,7 @@ export class HomeView {
       /* ignore */
     }
     if (v.kind === "desk") this.renderDesk();
+    else if (v.kind === "board") this.renderBoard();
     else if (!this.world?.pulledBook) this.panel.hidden = true;
   }
 
@@ -381,6 +389,113 @@ export class HomeView {
       h("div", { class: "h3-k", "data-testid": "desk-count" }, `TRÊN BÀN · ${this.desk.length}/${DESK_MAX}`),
       ...(rows.length ? rows : [h("p", { class: "h3-muted" }, "Bàn đang trống. Rút một cuốn từ kệ và bấm “Mở sách” – sách sẽ nằm ở đây cho tới khi bạn cất.")]),
     );
+  }
+
+  // ------------------------------------------------------------ the pinboard
+
+  private today(): string {
+    return dayKey(new Date());
+  }
+
+  private async loadBoard(): Promise<void> {
+    const today = this.today();
+    this.sections = boardSections(await this.deps.loadTasks(), today);
+    const s = this.sections;
+    const notes: BoardNote[] = [
+      {
+        key: "today",
+        title: "Hôm nay",
+        lines: s.today.map((t) => ({ text: t.title, box: true, done: t.done, urgent: isOverdue(t, today), right: isOverdue(t, today) ? "trễ hạn" : undefined })),
+        more: Math.max(0, s.today.length - 6),
+        alert: s.today.some((t) => isOverdue(t, today)),
+      },
+      { key: "week", title: "Tuần này", lines: s.week.map((t) => ({ text: t.title, box: true, right: weekdayName(t.date!) })), more: Math.max(0, s.week.length - 6), alert: false },
+      { key: "goals", title: "Dự định", lines: s.goals.map((t) => ({ text: `• ${t.title}`, right: t.date ? friendlyDay(t.date, today) : undefined })), more: Math.max(0, s.goals.length - 6), alert: false },
+      {
+        key: "events",
+        title: "Sự kiện sắp tới",
+        lines: s.events.map((t) => ({ text: t.title, right: countdown(t.date!, today), urgent: daysBetween(today, t.date!) <= 3 })),
+        more: Math.max(0, s.events.length - 6),
+        alert: s.events.some((t) => daysBetween(today, t.date!) <= 7),
+      },
+    ];
+    this.world?.setBoard(notes);
+  }
+
+  private renderBoard(): void {
+    if (this.world?.currentView.kind !== "board" || !this.sections) return;
+    const today = this.today();
+    const s = this.sections;
+    const names: Record<NoteKey, string> = { today: "Hôm nay", week: "Tuần này", goals: "Dự định", events: "Sự kiện" };
+    const lists: Record<NoteKey, Task[]> = { today: s.today, week: s.week, goals: s.goals, events: s.events };
+    const tabs = h(
+      "div",
+      { class: "board-tabs" },
+      ...(Object.keys(names) as NoteKey[]).map((k) => {
+        const b = h("button", { class: `board-tab ${k === this.note ? "on" : ""}`, type: "button", "data-testid": `board-tab-${k}` }, names[k], h("span", { class: "board-n" }, String(lists[k].filter((t) => !t.done).length)));
+        b.addEventListener("click", () => {
+          this.note = k;
+          this.renderBoard();
+        });
+        return b;
+      }),
+    );
+    const rows = lists[this.note].map((t) => {
+      const box = h("input", { type: "checkbox", class: "board-check", "data-testid": "board-check" }) as HTMLInputElement;
+      box.checked = t.done;
+      box.addEventListener("change", () => void this.tick(t));
+      const meta =
+        t.kind === "deadline" && t.date
+          ? countdown(t.date, today)
+          : t.date
+            ? isOverdue(t, today)
+              ? `trễ · ${friendlyDay(t.date, today)}`
+              : friendlyDay(t.date, today)
+            : t.kind === "goal"
+              ? "không hẹn ngày"
+              : "";
+      const title = h("button", { class: `board-item ${t.done ? "done" : ""}`, type: "button", "data-testid": "board-item" }, h("span", { class: "board-title" }, t.title), meta ? h("span", { class: `board-meta ${isOverdue(t, today) ? "late" : ""}` }, meta) : null);
+      title.addEventListener("click", () => void this.editTask(t));
+      return h("div", { class: "board-row" }, box, title);
+    });
+    const add = h("button", { class: "h3-primary", type: "button", "data-testid": "board-add" }, `+ Ghim vào “${names[this.note]}”`);
+    add.addEventListener("click", () => {
+      const presets: Record<NoteKey, [string | null, Task["kind"]]> = {
+        today: [today, "task"],
+        week: [addDays(today, 1), "task"],
+        goals: [null, "goal"],
+        events: [addDays(today, 7), "deadline"],
+      };
+      const [d, k] = presets[this.note];
+      void this.editTask(null, d, k);
+    });
+    const full = h("button", { class: "h3-ghost", type: "button", "data-testid": "board-planner" }, "Sổ kế hoạch");
+    full.addEventListener("click", () => this.deps.onPlanner());
+    this.panel.hidden = false;
+    this.panel.replaceChildren(
+      h("div", { class: "h3-k" }, "BẢNG GHIM"),
+      tabs,
+      ...(rows.length ? rows : [h("p", { class: "h3-muted" }, "Chưa có gì ở đây.")]),
+      h("div", { class: "h3-row" }, add, full),
+    );
+  }
+
+  private async tick(t: Task): Promise<void> {
+    const { update, next } = toggled(t, this.today());
+    await this.deps.putTask(update);
+    if (next) {
+      await this.deps.putTask(next);
+      toast(`Tốt lắm! Lần tới: ${friendlyDay(next.date!, this.today())}.`);
+    } else if (update.done) toast("Tốt lắm! Đã đánh dấu xong.");
+    await this.loadBoard();
+    this.renderBoard();
+  }
+
+  private async editTask(t: Task | null, date?: string | null, kind?: Task["kind"]): Promise<void> {
+    if (await this.deps.editTask(t, date, kind)) {
+      await this.loadBoard();
+      this.renderBoard();
+    }
   }
 
   // ------------------------------------------------------------ import & settings

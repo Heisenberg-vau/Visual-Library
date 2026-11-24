@@ -2,7 +2,7 @@ import { buildTree, flatten } from "../../core/library/shelves";
 import type { LibraryService } from "../../core/storage/LibraryService";
 import { addDays, countdown, dayKey, friendlyDay, longDate, weekStart, weekdayName, type DayKey } from "../../core/study/dates";
 import type { StudyStore } from "../../core/study/StudyStore";
-import { REPEAT_LABEL, groupByDay, isOverdue, nextOccurrence, todayList, upcomingDeadlines, weekDays, type Repeat, type Task } from "../../core/study/tasks";
+import { REPEAT_LABEL, groupByDay, isOverdue, todayList, toggled, upcomingDeadlines, weekDays, type Repeat, type Task } from "../../core/study/tasks";
 import type { BookMeta, Category } from "../../core/types";
 import { h, icon, iconButton } from "../dom";
 import { confirmDialog, modal, popupMenu, toast } from "../feedback";
@@ -168,6 +168,7 @@ export class PlannerView {
     const book = t.bookId ? this.books.find((b) => b.id === t.bookId) : null;
     const chips: HTMLElement[] = [];
     if (t.kind === "deadline") chips.push(h("span", { class: "chip-s exam" }, "Deadline · Thi"));
+    if (t.kind === "goal") chips.push(h("span", { class: "chip-s" }, "Dự định"));
     if (t.repeat) chips.push(h("span", { class: "chip-s repeat", "data-testid": "repeat-chip", html: `${icon("repeat", 12)} ${REPEAT_LABEL[t.repeat]}` }));
     if (subject) chips.push(h("span", { class: "chip-s" }, subject));
     if (t.date && !compact) chips.push(h("span", { class: `chip-s ${isOverdue(t, today) ? "late" : ""}` }, isOverdue(t, today) ? `Quá hạn · ${friendlyDay(t.date, today)}` : friendlyDay(t.date, today)));
@@ -199,14 +200,13 @@ export class PlannerView {
   }
 
   private async toggle(t: Task): Promise<void> {
-    const next = { ...t, done: !t.done, doneAt: t.done ? null : Date.now() };
-    await this.deps.store.putTask(next);
-    if (next.done && t.repeat) {
+    const { update, next } = toggled(t, this.today());
+    await this.deps.store.putTask(update);
+    if (next) {
       // The finished one stays as history; the next occurrence appears.
-      const date = nextOccurrence(t.repeat, t.date, this.today());
-      await this.deps.store.putTask({ ...t, id: crypto.randomUUID(), date, done: false, doneAt: null, createdAt: Date.now() });
-      toast(`Tốt lắm! Lần tới: ${friendlyDay(date, this.today())}.`);
-    } else if (next.done) {
+      await this.deps.store.putTask(next);
+      toast(`Tốt lắm! Lần tới: ${friendlyDay(next.date!, this.today())}.`);
+    } else if (update.done) {
       toast("Tốt lắm! Đã đánh dấu xong.");
     }
     await this.refresh();
@@ -219,7 +219,7 @@ export class PlannerView {
   }
 
   /** Create (t = null) or edit a task. */
-  async edit(t: Task | null, presetDate?: DayKey): Promise<void> {
+  async edit(t: Task | null, presetDate?: DayKey | null, presetKind?: Task["kind"]): Promise<boolean> {
     const today = this.today();
     const shelves = flatten(buildTree(this.cats));
     const result = await modal((close) => {
@@ -229,9 +229,10 @@ export class PlannerView {
         { class: "text-input", "data-testid": "task-kind" },
         h("option", { value: "task" }, "Việc cần làm"),
         h("option", { value: "deadline" }, "Deadline / Kỳ thi (có đếm ngược)"),
+        h("option", { value: "goal" }, "Dự định (mục tiêu dài hạn)"),
       );
-      kind.value = t?.kind ?? "task";
-      const date = h("input", { class: "text-input", type: "date", value: t ? (t.date ?? "") : (presetDate ?? today), "data-testid": "task-date" });
+      kind.value = t?.kind ?? presetKind ?? "task";
+      const date = h("input", { class: "text-input", type: "date", value: t ? (t.date ?? "") : presetDate === null ? "" : (presetDate ?? today), "data-testid": "task-date" });
       const quick = h(
         "div",
         { class: "quick-dates" },
@@ -290,7 +291,7 @@ export class PlannerView {
       setTimeout(() => title.focus(), 0);
       return form;
     });
-    if (!result) return;
+    if (!result) return false;
     const data = result as Pick<Task, "title" | "kind" | "date" | "subjectId" | "bookId" | "page" | "repeat">;
     // A repeating task needs a day to repeat from.
     if (data.repeat && !data.date) data.date = this.today();
@@ -300,6 +301,7 @@ export class PlannerView {
     await this.deps.store.putTask(task);
     toast(t ? "Đã lưu." : "Đã thêm vào kế hoạch.");
     await this.refresh();
+    return true;
   }
 }
 

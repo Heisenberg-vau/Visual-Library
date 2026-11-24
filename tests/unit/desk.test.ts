@@ -28,3 +28,33 @@ describe("desk", () => {
     expect(dustLevel(100)).toBe(1);
   });
 });
+
+import { boardSections, toggled, type Task } from "../../src/core/study/tasks";
+
+const T = (p: Partial<Task>): Task => ({ id: Math.random().toString(36), title: "x", kind: "task", date: null, subjectId: null, bookId: null, page: null, done: false, doneAt: null, createdAt: 1, ...p });
+
+describe("pinboard sections", () => {
+  // 2026-11-24 is a Tuesday; the week ends Sunday 2026-11-29
+  const today = "2026-11-24";
+  it("splits tasks into today / later this week / goals / events", () => {
+    const tasks = [
+      T({ title: "today", date: today }),
+      T({ title: "late", date: "2026-11-20" }),
+      T({ title: "thu", date: "2026-11-26" }),
+      T({ title: "next week", date: "2026-12-02" }),
+      T({ title: "goal", kind: "goal" }),
+      T({ title: "exam", kind: "deadline", date: "2026-11-27" }),
+    ];
+    const s = boardSections(tasks, today);
+    expect(s.today.map((t) => t.title)).toEqual(["late", "today"]);
+    expect(s.week.map((t) => t.title)).toEqual(["thu"]);
+    expect(s.goals.map((t) => t.title)).toEqual(["goal"]);
+    expect(s.events.map((t) => t.title)).toEqual(["exam"]);
+  });
+  it("ticking a repeating task yields the next one", () => {
+    const r = toggled(T({ date: today, repeat: "daily" }), today, 5, () => "n");
+    expect(r.update.done).toBe(true);
+    expect(r.next?.date).toBe("2026-11-25");
+    expect(toggled(r.update, today).update.done).toBe(false);
+  });
+});

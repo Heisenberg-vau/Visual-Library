@@ -899,3 +899,14 @@ svg.ic { stroke-width: 1.65; }
 .desk-actions { display: flex; flex-direction: column; gap: 6px; }
 .desk-actions .h3-ghost { min-height: 36px; font-size: 14px; padding: 0 10px; }
 .h3-panel { max-height: calc(100vh - 100px); overflow: auto; }
+.board-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 8px 0 6px; }
+.board-tab { font: inherit; font-size: 14px; border: 1px solid #d3c09a; background: transparent; border-radius: 8px; padding: 6px 2px; min-height: 40px; cursor: pointer; color: #2a1f16; }
+.board-tab.on { background: #2f4a3c; color: #f3ead2; border-color: #8a7a45; }
+.board-n { display: inline-block; margin-left: 4px; font-size: 12px; opacity: 0.75; }
+.board-row { display: flex; align-items: center; gap: 10px; border-top: 1px dashed #d3c09a; }
+.board-check { width: 22px; height: 22px; accent-color: #2f4a3c; flex: none; }
+.board-item { flex: 1; min-width: 0; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; text-align: left; font: inherit; color: #2a1f16; background: none; border: 0; padding: 10px 0; min-height: 44px; cursor: pointer; }
+.board-item.done .board-title { text-decoration: line-through; color: #8a7a62; }
+.board-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-meta { font-size: 13px; color: #6b5843; white-space: nowrap; }
+.board-meta.late { color: #8c2b22; }

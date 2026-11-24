@@ -8,11 +8,11 @@ export const REPEAT_LABEL: Record<Repeat, string> = {
   weekly: "Hằng tuần",
 };
 
-/** A study task or a deadline/exam set by the user. */
+/** A study task, a deadline/exam, or a longer-term goal ("dự định"). */
 export interface Task {
   id: string;
   title: string;
-  kind: "task" | "deadline";
+  kind: "task" | "deadline" | "goal";
   /** Due day, or null for "no date". */
   date: DayKey | null;
   /** Subject = a shelf (category) id, optional. */
@@ -53,6 +53,7 @@ const byDateThenCreated = (a: Task, b: Task) =>
 
 /** "Hôm nay": overdue + due today + undated, open first then done-today. */
 export function todayList(tasks: Task[], today: DayKey): Task[] {
+  tasks = tasks.filter((t) => t.kind !== "goal"); // goals live on their own
   const open = tasks.filter((t) => !t.done && (t.date === null || daysBetween(today, t.date) <= 0));
   const doneToday = tasks.filter((t) => t.done && (t.date === today || (t.doneAt && sameLocalDay(t.doneAt, today))));
   return [...open.sort(byDateThenCreated), ...doneToday.sort(byDateThenCreated)];
@@ -72,7 +73,7 @@ export function weekDays(anyDay: DayKey): DayKey[] {
 
 export function groupByDay(tasks: Task[], days: DayKey[]): Map<DayKey, Task[]> {
   const m = new Map<DayKey, Task[]>(days.map((d) => [d, []]));
-  for (const t of tasks) if (t.date && m.has(t.date)) m.get(t.date)!.push(t);
+  for (const t of tasks) if (t.kind !== "goal" && t.date && m.has(t.date)) m.get(t.date)!.push(t);
   for (const list of m.values()) list.sort((a, b) => Number(a.done) - Number(b.done) || byDateThenCreated(a, b));
   return m;
 }
@@ -87,5 +88,33 @@ export function upcomingDeadlines(tasks: Task[], today: DayKey, limit = 6): Task
 
 /** Badge number: open tasks that are overdue or due today. */
 export function dueCount(tasks: Task[], today: DayKey): number {
-  return tasks.filter((t) => !t.done && t.date !== null && daysBetween(today, t.date) <= 0).length;
+  return tasks.filter((t) => t.kind !== "goal" && !t.done && t.date !== null && daysBetween(today, t.date) <= 0).length;
+}
+
+/** The four notes of the pinboard. */
+export interface BoardSections {
+  today: Task[];
+  /** Later this week (not today), open, not deadlines. */
+  week: Task[];
+  goals: Task[];
+  events: Task[];
+}
+
+export function boardSections(tasks: Task[], today: DayKey): BoardSections {
+  const end = addDays(weekStart(today), 6);
+  return {
+    today: todayList(tasks, today),
+    week: tasks
+      .filter((t) => t.kind === "task" && !t.done && t.date && daysBetween(today, t.date) > 0 && daysBetween(t.date, end) >= 0)
+      .sort(byDateThenCreated),
+    goals: tasks.filter((t) => t.kind === "goal" && !t.done).sort(byDateThenCreated),
+    events: upcomingDeadlines(tasks, today, 8),
+  };
+}
+
+/** Ticking a task (or un-ticking it). A repeating task also yields its next occurrence. */
+export function toggled(t: Task, today: DayKey, now = Date.now(), newId: () => string = () => crypto.randomUUID()): { update: Task; next: Task | null } {
+  const update = { ...t, done: !t.done, doneAt: t.done ? null : now };
+  const next = update.done && t.repeat ? { ...t, id: newId(), date: nextOccurrence(t.repeat, t.date, today), done: false, doneAt: null, createdAt: now } : null;
+  return { update, next };
 }

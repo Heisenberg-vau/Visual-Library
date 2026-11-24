@@ -46,7 +46,8 @@ Kiến trúc và quy ước: xem [ARCHITECTURE.md](ARCHITECTURE.md). Mỗi lần
 | v1.1 | Không gian thư viện 3D: mỗi danh mục là một dãy tủ, danh mục con là tầng kệ; gáy sách theo màu bìa và số trang; vuốt để lướt kệ; rút sách ra xem bìa thật, mở đọc; nhớ chỗ đang đứng | ✅ v1.1.0 |
 | v1.1.1 | Mỗi tủ 4 tầng bằng nhau; vào tủ là thấy đủ 4 tầng, chỉ vuốt ngang | ✅ v1.2.0 |
 | v1.2 | Bàn học: mở sách là sách nằm trên bàn (tối đa 6, đầy thì đề nghị cất cuốn lâu nhất chưa mở), khoảng trống có phiếu trên kệ, bụi + lời nhắc sau 7 ngày, cất lên kệ bay về đúng chỗ, chạm sách trên bàn để đọc tiếp | ✅ v1.2.0 |
-| v1.3 | Bảng ghim 3D: việc hôm nay, kế hoạch tuần, dự định, sự kiện sắp tới | |
+| v1.2.1 | Thay dãy kệ trang trí bằng tranh sơn dầu (vẽ bằng code, lối cổ điển) khung mạ vàng, chậu cây, tượng bán thân, bình gốm, quả địa cầu | ✅ v1.3.0 |
+| v1.3 | Bảng ghim 3D: 4 tờ giấy Hôm nay / Tuần này / Dự định / Sự kiện sắp tới hiện kế hoạch thật (ghim đỏ khi sắp tới hạn); chạm tờ giấy để mở mục; tick xong, thêm, sửa ngay trong phòng; loại việc mới "Dự định" | ✅ v1.3.0 |
 | v1.4 | Sảnh, chuyển cảnh giữa các khu, hướng dẫn lần đầu | |
 | v1.5 | Màn hình đọc theo phong cách mới và hoàn thiện | |
 

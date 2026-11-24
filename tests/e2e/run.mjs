@@ -1265,6 +1265,44 @@ test("v1.2: the desk holds 6 at most; dusty books get a reminder", async () => {
   await W(() => window.__app.meta.setSetting("desk", []));
 });
 
+test("v1.3: the pinboard shows the plan; add, tick, goals and events from the room", async () => {
+  await page.click('[data-testid="h3-board"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="home3d"]').dataset.view === "board" && window.__world.idle);
+  await page.waitForSelector('[data-testid="board-tab-today"]');
+  // a task for today
+  await page.click('[data-testid="board-add"]');
+  await page.fill('[data-testid="task-title"]', "Ôn ATA 72-30 sơ đồ dòng khí");
+  await page.click('[data-testid="task-save"]');
+  await page.waitForFunction(() => window.__world.noteLines("today").includes("Ôn ATA 72-30 sơ đồ dòng khí"));
+  const row = page.locator(".board-row", { hasText: "Ôn ATA 72-30" });
+  await row.locator('[data-testid="board-check"]').check();
+  await page.waitForFunction(() => document.querySelector(".board-row .board-item.done"));
+  // tapping the events note opens that section
+  const pt = await W(() => window.__world.noteScreenPoint("events"));
+  await page.mouse.click(pt.x, pt.y);
+  await page.waitForSelector('[data-testid="board-tab-events"].on');
+  await page.click('[data-testid="board-add"]');
+  assert.equal(await page.inputValue('[data-testid="task-kind"]'), "deadline");
+  await page.fill('[data-testid="task-title"]', "Thi An toàn sân đỗ");
+  const in3 = await W(() => { const d = new Date(); d.setDate(d.getDate() + 3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+  await page.fill('[data-testid="task-date"]', in3);
+  await page.click('[data-testid="task-save"]');
+  await page.waitForFunction(() => window.__world.noteLines("events").includes("Thi An toàn sân đỗ"));
+  assert.match(await page.locator(".board-row", { hasText: "Thi An toàn sân đỗ" }).textContent(), /còn 3 ngày/);
+  // a goal: its own note, not in today's list
+  await page.click('[data-testid="board-tab-goals"]');
+  await page.click('[data-testid="board-add"]');
+  assert.equal(await page.inputValue('[data-testid="task-kind"]'), "goal");
+  assert.equal(await page.inputValue('[data-testid="task-date"]'), "");
+  await page.fill('[data-testid="task-title"]', "Hoàn thành CMT Level I");
+  await page.click('[data-testid="task-save"]');
+  await page.waitForFunction(() => window.__world.noteLines("goals").some((l) => l.includes("Hoàn thành CMT Level I")));
+  assert.ok(!(await W(() => window.__world.noteLines("today"))).some((l) => l.includes("CMT")));
+  await page.waitForFunction(() => window.__world.idle);
+  await page.waitForTimeout(400);
+  await shot("54-pinboard");
+});
+
 test("v1.1: favourite from the pulled-out book; import lands on the stack you stand at", async () => {
   const si = 0;
   await W(() => window.__world.goTo({ kind: "stack", index: 0 }, true));
