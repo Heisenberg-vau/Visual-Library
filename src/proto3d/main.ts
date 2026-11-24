@@ -14,6 +14,7 @@ import {
   woodTexture,
   type SpineStyle,
 } from "./textures";
+import { CELLS_PER_ATLAS, StackChunk, hash, type ShelfBook } from "./stacks";
 
 /*
  * 3D prototype of the library room, following the user's sketch:
@@ -25,13 +26,14 @@ import {
 type View = "hall" | "desk" | "board" | `aisle${number}`;
 
 interface Book {
-  mesh: THREE.Mesh;
+  shelf: ShelfBook;
+  chunk: StackChunk;
+  stack: THREE.Group;
+  /** A real mesh only while the book is out of the shelf (pulled / on the desk). */
+  mesh: THREE.Mesh | null;
   title: string;
   author: string;
   color: string;
-  cloth: boolean;
-  side: 1 | -1;
-  home: { parent: THREE.Object3D; pos: THREE.Vector3; quat: THREE.Quaternion };
   state: "shelf" | "out" | "desk";
 }
 
@@ -64,12 +66,18 @@ const COLORS = ["#6e2a22", "#2f4a3c", "#3b2f5a", "#7a5a22", "#23465e", "#5a2a3a"
 // ---------------------------------------------------------------- setup
 const host = document.getElementById("scene")!;
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+// Sharp when still, lighter while the camera moves.
+const DPR_IDLE = Math.min(window.devicePixelRatio || 1, 2);
+const DPR_MOVING = Math.min(DPR_IDLE, 1.1);
+renderer.setPixelRatio(DPR_IDLE);
 renderer.setSize(host.clientWidth, host.clientHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+// Shadows only change when something is moved: recompute on demand.
+renderer.shadowMap.autoUpdate = false;
+renderer.shadowMap.needsUpdate = true;
 host.append(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -245,12 +253,10 @@ function buildLights(): void {
   sun.shadow.camera.bottom = -4;
   sun.shadow.bias = -0.0004;
   scene.add(sun, sun.target);
-  // warm ceiling fill over the stacks
-  for (const x of [2.2, 4.2]) {
-    const p = new THREE.PointLight("#ffd59a", 6, 7, 1.8);
-    p.position.set(x, 3.4, -3.2);
-    scene.add(p);
-  }
+  // warm fill over the stacks
+  const p = new THREE.PointLight("#ffd59a", 9, 9, 1.6);
+  p.position.set(3.1, 3.3, -3.0);
+  scene.add(p);
 }
 
 // ---------------------------------------------------------------- bookcases
@@ -293,45 +299,32 @@ function buildStack(ci: number): void {
   const plaque = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.155), new THREE.MeshStandardMaterial({ map: plaqueTexture(CATEGORIES[ci].name), metalness: 0.75, roughness: 0.35 }));
   plaque.position.set(0, 1.62, L / 2 + 0.027);
   g.add(plaque);
-  // books on both faces
+  // books on the left face (the side you look at), merged per atlas
   const cat = CATEGORIES[ci];
+  const shelfBooks: ShelfBook[] = [];
   let n = 0;
-  for (const side of [1, -1] as const) {
-    for (let si = 0; si < shelves.length - 1; si++) {
-      let z = -L / 2 + 0.06;
-      const shelfTop = shelves[si] + 0.015;
-      while (z < L / 2 - 0.12) {
-        const [title, author, kind] = cat.books[n % cat.books.length];
-        const seed = ci * 1000 + n * 17 + side * 7;
-        const cloth = kind === "nb";
-        const t = 0.028 + (((seed * 9301 + 49297) % 233280) / 233280) * 0.045 + (cloth ? -0.01 : 0);
-        const hgt = 0.27 + (((seed * 7 + 13) % 11) / 11) * 0.08;
-        const d = 0.2;
-        const color = cloth ? ["#3d5a6b", "#5a4a3a", "#4a5a3a"][ci] : COLORS[(seed >> 2) % COLORS.length];
-        const spineMat = new THREE.MeshStandardMaterial({ map: spineTexture(title, color, seed, spineStyle, cloth), roughness: cloth ? 0.85 : 0.5 });
-        const plain = new THREE.MeshStandardMaterial({ color, roughness: 0.55 });
-        // faces: +x, -x, +y, -y, +z, -z  (spine faces the aisle)
-        const mats = side === 1 ? [spineMat, mat.pages, mat.pages, mat.pages, plain, plain] : [mat.pages, spineMat, mat.pages, mat.pages, plain, plain];
-        const m = box(d, hgt, t, mats);
-        if (side === -1) {
-          // keep the lettering readable on the other face
-          spineMat.map!.wrapS = THREE.RepeatWrapping;
-          spineMat.map!.repeat.x = -1;
-        }
-        m.position.set(side * (W / 2 - d / 2 - 0.015), shelfTop + hgt / 2, z + t / 2);
-        // a gentle lean now and then
-        g.add(m);
-        const book: Book = {
-          mesh: m, title, author, color, cloth, side,
-          home: { parent: g, pos: m.position.clone(), quat: m.quaternion.clone() }, state: "shelf",
-        };
-        m.userData.book = book;
-        books.push(book);
-        z += t + 0.003;
-        n++;
-        if ((seed % 29) === 0) z += 0.12; // a little space here and there
-      }
+  const d = 0.2;
+  for (let si = 0; si < shelves.length - 1; si++) {
+    let z = -L / 2 + 0.06;
+    const shelfTop = shelves[si] + 0.015;
+    while (z < L / 2 - 0.12) {
+      const [title, author, kind] = cat.books[n % cat.books.length];
+      const id = `${ci}-${n}`;
+      const seed = hash(id);
+      const cloth = kind === "nb";
+      const t = 0.028 + (seed % 1000) / 1000 * 0.045 + (cloth ? -0.01 : 0);
+      const hgt = 0.27 + ((seed >>> 10) % 100) / 100 * 0.08;
+      const color = cloth ? ["#3d5a6b", "#5a4a3a", "#4a5a3a"][ci] : COLORS[(seed >>> 3) % COLORS.length];
+      shelfBooks.push({ id, title, author, color, cloth, d, h: hgt, t, pos: new THREE.Vector3(-(W / 2 - d / 2 - 0.015), shelfTop + hgt / 2, z + t / 2) });
+      z += t + 0.003;
+      n++;
+      if (seed % 29 === 0) z += 0.12; // a little space here and there
     }
+  }
+  for (let i = 0; i < shelfBooks.length; i += CELLS_PER_ATLAS) {
+    const chunk = new StackChunk(shelfBooks.slice(i, i + CELLS_PER_ATLAS), spineStyle, renderer);
+    g.add(chunk.mesh);
+    for (const sb of chunk.books) books.push({ shelf: sb, chunk, stack: g, mesh: null, title: sb.title, author: sb.author, color: sb.color, state: "shelf" });
   }
   scene.add(g);
   zones.push(g);
@@ -380,9 +373,6 @@ function buildDesk(): void {
   lampLight.shadow.mapSize.set(1024, 1024);
   lampLight.shadow.bias = -0.0006;
   scene.add(lampLight, lampLight.target);
-  const glow = new THREE.PointLight("#ffc979", 2.2, 3, 2);
-  glow.position.set(DESK.x + 0.48, 1.1, DESK.z - 0.15);
-  scene.add(glow);
   // inkwell + pen
   const ink = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.05, 16), new THREE.MeshStandardMaterial({ color: "#10161c", roughness: 0.1, metalness: 0.2 }));
   ink.position.set(-0.55, 0.81, -0.22);
@@ -481,8 +471,9 @@ const VIEWS: Record<string, { pos: THREE.Vector3; look: THREE.Vector3; fov: numb
   board: { pos: new THREE.Vector3(-3.55, 1.45, -1.3), look: new THREE.Vector3(-4.4, 1.38, -3.0), fov: 46 },
 };
 function aisleView(ci: number, along = 0): { pos: THREE.Vector3; look: THREE.Vector3; fov: number } {
-  const x = caseX[ci] + STACK.W / 2;
-  return { pos: new THREE.Vector3(x + 0.86, 1.12, caseZ + along), look: new THREE.Vector3(x, 1.0, caseZ + along), fov: 58 };
+  // stand on the LEFT of the stack, looking at its left face
+  const x = caseX[ci] - STACK.W / 2;
+  return { pos: new THREE.Vector3(x - 0.86, 1.12, caseZ + along), look: new THREE.Vector3(x, 1.0, caseZ + along), fov: 58 };
 }
 
 let view: View = "hall";
@@ -531,39 +522,57 @@ function tweenObject(o: THREE.Object3D, pos: THREE.Vector3, quat: THREE.Quaterni
   kick();
 }
 
-function giveCover(b: Book): void {
-  const ms = b.mesh.material as THREE.Material[];
-  if ((ms[4] as THREE.MeshStandardMaterial).map) return;
-  const cover = new THREE.MeshStandardMaterial({ map: coverTexture(b.title, b.author, b.color), roughness: 0.5 });
-  ms[4] = cover;
-  b.mesh.material = ms;
+/** A real book mesh at the shelf position (only for books taken out). */
+function bookMesh(b: Book): THREE.Mesh {
+  if (b.mesh) return b.mesh;
+  const sb = b.shelf;
+  const spine = new THREE.MeshStandardMaterial({ map: spineTexture(sb.title, sb.color, hash(sb.id), spineStyle, sb.cloth), roughness: 0.5 });
+  const cover = new THREE.MeshStandardMaterial({ map: coverTexture(sb.title, sb.author, sb.color), roughness: 0.5 });
+  const plain = new THREE.MeshStandardMaterial({ color: sb.color, roughness: 0.55 });
+  // faces: +x, -x (spine), +y, -y, +z (cover), -z
+  const m = box(sb.d, sb.h, sb.t, [mat.pages, spine, mat.pages, mat.pages, cover, plain]);
+  m.position.copy(b.stack.localToWorld(sb.pos.clone()));
+  m.userData.book = b;
+  scene.add(m);
+  b.mesh = m;
+  return m;
+}
+
+function dropMesh(b: Book): void {
+  if (!b.mesh) return;
+  scene.remove(b.mesh);
+  b.mesh.geometry.dispose();
+  for (const m of b.mesh.material as THREE.MeshStandardMaterial[]) {
+    if (m === mat.pages) continue;
+    m.map?.dispose();
+    m.dispose();
+  }
+  b.mesh = null;
 }
 
 function pull(b: Book): void {
   if (pulled && pulled !== b) putBack(pulled);
   pulled = b;
   b.state = "out";
-  giveCover(b);
-  scene.attach(b.mesh);
+  const m = bookMesh(b);
+  b.chunk.setVisible(b.shelf, false);
   const dir = new THREE.Vector3().subVectors(target, camera.position).normalize();
   const pos = camera.position.clone().add(dir.multiplyScalar(0.55));
   pos.y -= 0.02;
-  const m = new THREE.Object3D();
-  m.position.copy(pos);
-  m.lookAt(camera.position);
-  tweenObject(b.mesh, pos, m.quaternion, 750);
+  const o = new THREE.Object3D();
+  o.position.copy(pos);
+  o.lookAt(camera.position);
+  tweenObject(m, pos, o.quaternion, 750, () => (renderer.shadowMap.needsUpdate = true));
   ui();
 }
 
 function putBack(b: Book): void {
-  const { parent, pos, quat } = b.home;
-  const wp = parent.localToWorld(pos.clone());
-  const pq = new THREE.Quaternion();
-  parent.getWorldQuaternion(pq);
-  tweenObject(b.mesh, wp, pq.multiply(quat.clone()), 700, () => {
-    parent.attach(b.mesh);
-    b.mesh.position.copy(pos);
-    b.mesh.quaternion.copy(quat);
+  const m = bookMesh(b);
+  const home = b.stack.localToWorld(b.shelf.pos.clone());
+  tweenObject(m, home, new THREE.Quaternion(), 700, () => {
+    b.chunk.setVisible(b.shelf, true);
+    dropMesh(b);
+    renderer.shadowMap.needsUpdate = true;
   });
   b.state = "shelf";
   const i = onDesk.indexOf(b);
@@ -581,10 +590,12 @@ function toDesk(b: Book): void {
   onDesk.push(b);
   b.state = "desk";
   pulled = null;
-  const m = new THREE.Object3D();
-  m.rotation.set(-Math.PI / 2, 0, onDesk.length % 2 ? 0.18 : -0.12);
-  const t = (b.mesh.geometry as THREE.BoxGeometry).parameters?.depth ?? 0.04;
-  tweenObject(b.mesh, new THREE.Vector3(spot.x, spot.y + t / 2 + onDesk.length * 0.002, spot.z), m.quaternion, 1100);
+  const m = bookMesh(b);
+  const o = new THREE.Object3D();
+  o.rotation.set(-Math.PI / 2, 0, onDesk.length % 2 ? 0.18 : -0.12);
+  tweenObject(m, new THREE.Vector3(spot.x, spot.y + b.shelf.t / 2 + onDesk.length * 0.002, spot.z), o.quaternion, 1100, () => {
+    renderer.shadowMap.needsUpdate = true;
+  });
   setTimeout(() => goTo("desk"), 350);
 }
 
@@ -602,7 +613,7 @@ renderer.domElement.addEventListener("pointermove", (e) => {
   if (Math.abs(dx) > 6) drag.moved = true;
   if (drag.moved && view.startsWith("aisle") && !anim) {
     // swipe along the shelf
-    aisleAlong = THREE.MathUtils.clamp(drag.along + dx * 0.004, -STACK.L / 2 + 0.6, STACK.L / 2 - 0.6);
+    aisleAlong = THREE.MathUtils.clamp(drag.along - dx * 0.004, -STACK.L / 2 + 0.6, STACK.L / 2 - 0.6);
     const v = aisleView(Number(view.slice(5)), aisleAlong);
     camera.position.copy(v.pos);
     target.copy(v.look);
@@ -619,7 +630,9 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   const hits = ray.intersectObjects(scene.children, true);
   for (const h of hits) {
     let o: THREE.Object3D | null = h.object;
-    const book = o.userData.book as Book | undefined;
+    const chunk = o.userData.chunk as StackChunk | undefined;
+    const sb = chunk && h.faceIndex != null ? chunk.bookAtFace(h.faceIndex) : null;
+    const book = (o.userData.book as Book | undefined) ?? (sb ? books.find((x) => x.shelf === sb) : undefined);
     if (book) {
       if (book.state === "desk" && view === "desk") return flash(`Mở "${book.title}" để đọc tiếp (bản thử chưa mở sách thật).`);
       if (view.startsWith("aisle") && book.state === "shelf") return pull(book);
@@ -686,6 +699,13 @@ function kick(): void {
   running = true;
   requestAnimationFrame(frame);
 }
+let moving = false;
+function setMoving(m: boolean): void {
+  if (m === moving) return;
+  moving = m;
+  renderer.setPixelRatio(m ? DPR_MOVING : DPR_IDLE);
+  renderer.setSize(host.clientWidth, host.clientHeight);
+}
 function frame(now: number): void {
   let busy = false;
   if (anim) {
@@ -704,8 +724,11 @@ function frame(now: number): void {
     else tweens.splice(i, 1);
   }
   camera.lookAt(target);
+  const keepGoing = busy || !!drag;
+  if (keepGoing) setMoving(true);
+  else if (moving) setMoving(false); // last frame at full sharpness
   renderer.render(scene, camera);
-  if (busy || drag) requestAnimationFrame(frame);
+  if (keepGoing) requestAnimationFrame(frame);
   else running = false;
 }
 window.addEventListener("resize", () => {
@@ -725,17 +748,24 @@ caseX.forEach((x, i) => aisleX.push(x + (i < caseX.length - 1 ? (caseX[i + 1] - 
 buildDesk();
 buildBoard();
 // one book already on the desk, leaving its gap on the shelf
-const first = books.find((b) => b.title === "Động cơ phản lực" && b.side === 1);
+const first = books.find((b) => b.title === "Động cơ phản lực");
 if (first) {
-  giveCover(first);
-  scene.attach(first.mesh);
+  const m = bookMesh(first);
+  first.chunk.setVisible(first.shelf, false);
   onDesk.push(first);
   first.state = "desk";
-  const s = deskSpots[0];
-  first.mesh.position.set(s.x, s.y + 0.02, s.z);
-  first.mesh.rotation.set(-Math.PI / 2, 0, 0.18);
+  const sp = deskSpots[0];
+  m.position.set(sp.x, sp.y + first.shelf.t / 2, sp.z);
+  m.rotation.set(-Math.PI / 2, 0, 0.18);
+}
+// Warm up: compile shaders and upload every texture now, so the first
+// flight to each spot does not stutter.
+renderer.compile(scene, camera);
+for (const v of ["desk", "board", ...caseX.map((_, i) => `aisle${i}`)] as View[]) {
+  goTo(v, true);
+  renderer.render(scene, camera);
 }
 const start = (new URLSearchParams(location.search).get("view") as View) || "hall";
 goTo(start, true);
-(window as unknown as { __proto3d: unknown }).__proto3d = { goTo, books, pull, toDesk, putBack, renderer };
+(window as unknown as { __proto3d: unknown }).__proto3d = { goTo, books, pull, toDesk, putBack, renderer, scene, camera };
 document.body.dataset.ready = "1";
