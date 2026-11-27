@@ -63,8 +63,8 @@ Mục tiêu: không mất dữ liệu, biết rõ dung lượng, dọn được,
 | Mốc | Nội dung | Trạng thái |
 |---|---|---|
 | v2.0 | Kho lưu trữ: dung lượng theo tủ/cuốn/loại dữ liệu; trạng thái lưu bền + nút bật; kiểm tra toàn vẹn (nhanh/kỹ, chỉ báo cáo); chẩn đoán thiết bị (trình duyệt, chạy như app, chọn thư mục, ghi/đọc thử 200 MB so từng byte, dấu kiểm tra qua khởi động lại). Nền móng: mọi lần đọc-sửa-ghi gom vào một giao dịch (sửa 4 lỗi ghi đè: vị trí đọc khi chuyển kệ/gắn thẻ/xóa kệ, giờ học, trang đã đọc); xóa sách lúc đang lập chỉ mục không còn để lại chữ mồ côi; test nâng cấp CSDL từ mọi phiên bản cũ | ✅ v2.0.0 |
-| v2.1 | Sao lưu & khôi phục (toàn bộ hoặc chỉ ghi chú, tăng dần, mã kiểm tra SHA-256 từng file, xác minh khi khôi phục), tuỳ chọn khóa bằng mật khẩu (AES-GCM) | |
-| v2.2 | Thư mục thư viện trên máy – chỉ nếu trình duyệt hỗ trợ (Brave Android: nhiều khả năng không) | |
+| v2.1 | Sao lưu & khôi phục: file .vlbak tải về máy (toàn bộ / phần mới / chỉ ghi chú & kế hoạch), mã kiểm tra SHA-256 từng mục, tự kiểm tra ngay sau khi tạo và trước khi khôi phục; khóa bằng mật khẩu tuỳ chọn (AES-GCM 256, PBKDF2 600.000 vòng, từng khung 1 MB gắn số thứ tự – file bị cắt hay sửa đều bị từ chối); khôi phục từ nhiều file cùng lúc, thay cả thư viện trong một giao dịch. Sửa: ô chọn trong hộp “Thêm việc” không tự mở lại khi chạm khoảng trống | ✅ v2.1.0 |
+| v2.2 | Thư mục thư viện trên máy – bỏ qua: Brave Android không hỗ trợ chọn thư mục (đã đo trên máy) | ⏭ |
 | v2.3 | Dọn dẹp: thùng rác 30 ngày, bản trùng, dữ liệu tạo lại được, kho lạnh (gỡ file, giữ ghi chú) | |
 | v2.4 | Độ bền ở 10 GB: tắt app giữa chừng, máy đầy, ~1.000 cuốn | |
 

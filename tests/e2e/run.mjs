@@ -1401,6 +1401,11 @@ test("v1.3: the pinboard shows the plan; add, tick, goals and events from the ro
   await page.waitForSelector('[data-testid="board-tab-today"]');
   // a task for today
   await page.click('[data-testid="board-add"]');
+  // v2.0.1: no list sits inside a <label> cell (a tap in the cell's empty space reopened it on Android)
+  assert.equal(await page.locator(".task-form label select, .task-form label input").count(), 0);
+  const kb = await page.locator('[data-testid="task-kind"]').boundingBox();
+  await page.mouse.click(kb.x + kb.width / 2, kb.y + kb.height + 30); // the empty space under "Loại"
+  assert.ok(!(await W(() => ["SELECT", "INPUT"].includes(document.activeElement?.tagName) && document.activeElement.dataset.testid !== "task-title")), "a tap in empty space focuses no field");
   await page.fill('[data-testid="task-title"]', "Ôn ATA 72-30 sơ đồ dòng khí");
   await page.click('[data-testid="task-save"]');
   await page.waitForFunction(() => window.__world.noteLines("today").includes("Ôn ATA 72-30 sơ đồ dòng khí"));
@@ -1677,6 +1682,78 @@ test("v2.0: Kho lưu trữ: sizes, an integrity check that finds planted problem
   await page.waitForFunction(() => /vẫn còn nguyên/.test(document.querySelector('[data-testid="st-marker-state"]')?.textContent ?? ""));
   // tidy the planted record so later tests see a clean library
   await W(() => new Promise((res) => { const r = indexedDB.open("visual-library"); r.onsuccess = () => { const t = r.result.transaction("ink", "readwrite"); t.objectStore("ink").delete("ghost-book:0"); t.oncomplete = () => { r.result.close(); res(); }; }; }));
+  await page.click(".st-back");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="storage"]'));
+});
+
+test("v2.1: a locked backup downloads, refuses a wrong password, and brings the library back exactly", async () => {
+  const before = await W(async () => ({
+    books: (await window.__app.library.list()).map((b) => b.id).sort(),
+    tasks: (await window.__app.studyStore.listTasks()).length,
+    files: (await window.__app.files.list()).sort(),
+  }));
+  assert.ok(before.books.length >= 2, "a library to back up");
+  await W(() => window.__app.openStorage());
+  await page.waitForSelector('[data-testid="bk-last"]');
+  assert.match(await page.textContent('[data-testid="bk-last"]'), /Chưa sao lưu lần nào/);
+  assert.ok(await page.isDisabled('[data-testid="bk-new"]'), "nothing to add to before a first backup");
+  await page.click('[data-testid="bk-full"]');
+  await page.fill('[data-testid="bk-pass"]', "matkhau-123");
+  await page.fill('[data-testid="bk-pass2"]', "khac-123");
+  await page.click('[data-testid="bk-go"]');
+  assert.match(await page.textContent('[data-testid="bk-pass-error"]'), /không giống nhau/);
+  await page.fill('[data-testid="bk-pass2"]', "matkhau-123");
+  await page.click('[data-testid="bk-go"]');
+  await page.waitForFunction(() => window.__lastBackup, null, { timeout: 120000 });
+  await page.waitForFunction(() => /Lần sao lưu gần nhất/.test(document.querySelector('[data-testid="bk-last"]')?.textContent ?? ""));
+  assert.match(await page.textContent('[data-testid="bk-last"]'), /toàn bộ · .* · có khóa/);
+  await shot("66-backup");
+  const { b64, name, title } = await W(async () => {
+    const { blob, name } = window.__lastBackup;
+    const u = new Uint8Array(await blob.arrayBuffer());
+    let s = "";
+    for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+    return { b64: btoa(s), name, title: (await window.__app.library.list())[0].title };
+  });
+  const bytes = Buffer.from(b64, "base64");
+  assert.match(name, /^visual-library-\d{4}-\d\d-\d\d-\d{4}-full-khoa\.vlbak$/);
+  assert.equal(bytes.subarray(0, 7).toString(), "VLBAK1\n");
+  assert.ok(!bytes.includes(Buffer.from(title)), "a locked backup does not show a book's title");
+
+  // the library changes afterwards: a book goes, a task appears
+  const gone = await W(async () => (await window.__app.library.list()).find((b) => b.kind !== "notebook").id);
+  await W(async (id) => {
+    await window.__app.library.delete(id);
+    await window.__app.studyStore.putTask({ id: "after-backup", title: "Việc thêm sau", kind: "task", date: null, subjectId: null, bookId: null, page: null, done: false, doneAt: null, createdAt: Date.now() });
+  }, gone);
+
+  // restore: a wrong password first
+  await page.setInputFiles('[data-testid="bk-restore-input"]', { name, mimeType: "application/octet-stream", buffer: bytes });
+  await page.waitForSelector('[data-testid="bk-open-pass"]');
+  await page.fill('[data-testid="bk-open-pass"]', "sai-mat-khau");
+  await page.click('[data-testid="bk-open-go"]');
+  await page.waitForSelector('[data-testid="bk-wrong"]', { timeout: 60000 });
+  await page.fill('[data-testid="bk-open-pass"]', "matkhau-123");
+  await page.click('[data-testid="bk-open-go"]');
+  await page.waitForSelector(".modal .btn-danger", { timeout: 120000 });
+  assert.match(await page.textContent(".modal"), /Thay thư viện bằng bản sao lưu/);
+  await shot("67-restore-confirm");
+  await Promise.all([page.waitForEvent("load", { timeout: 120000 }), page.click(".modal .btn-danger")]);
+  await page.waitForFunction(() => window.__app?.library, null, { timeout: 60000 });
+  const after = await W(async () => ({
+    books: (await window.__app.library.list()).map((b) => b.id).sort(),
+    tasks: (await window.__app.studyStore.listTasks()).map((t) => t.id),
+    files: (await window.__app.files.list()).sort(),
+  }));
+  assert.deepEqual(after.books, before.books, "the deleted book is back");
+  assert.deepEqual(after.files, before.files, "with its file");
+  assert.ok(!after.tasks.includes("after-backup"), "the later task is gone");
+  assert.equal(after.tasks.length, before.tasks);
+  // the book opens
+  await W(async (id) => { const f = await window.__app.library.readFile(id); if (!f.size) throw new Error("empty"); }, gone);
+  // and the log now knows these files are backed up
+  await W(() => window.__app.openStorage());
+  await page.waitForSelector('[data-testid="bk-last"]');
   await page.click(".st-back");
   await page.waitForFunction(() => !document.querySelector('[data-testid="storage"]'));
 });

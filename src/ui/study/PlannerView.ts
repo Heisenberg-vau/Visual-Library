@@ -223,6 +223,12 @@ export class PlannerView {
     const today = this.today();
     const shelves = flatten(buildTree(this.cats));
     const result = await modal((close) => {
+      let n = 0;
+      const field = (caption: string, control: HTMLElement, extra?: HTMLElement | null, cls = "") => {
+        const id = control.id || `tf-${Date.now().toString(36)}-${n++}`;
+        control.id = id;
+        return h("div", { class: `field ${cls}`.trim() }, h("label", { for: id }, caption), control, extra ?? null);
+      };
       const title = h("input", { class: "text-input", type: "text", placeholder: "Ví dụ: Ôn chương 12 Rolls-Royce, Làm đề M11…", value: t?.title ?? "", "data-testid": "task-title" });
       const kind = h(
         "select",
@@ -262,9 +268,12 @@ export class PlannerView {
         { class: "modal modal-wide task-form", role: "dialog", "aria-modal": "true", "data-testid": "task-form" },
         h("h2", {}, t ? "Sửa việc" : "Thêm việc"),
         title,
-        h("div", { class: "form-grid" }, h("label", {}, "Loại", kind), h("label", {}, "Ngày", date, quick)),
-        h("div", { class: "form-grid" }, h("label", {}, "Môn", subject), h("label", { class: "book-pick" }, "Sách / vở", book, page)),
-        h("div", { class: "form-grid" }, h("label", {}, "Lặp lại", repeat), h("span")),
+        // Each field is a plain box: only its caption is tied to the control. A
+        // <label> around the whole cell made a tap in its empty space (on Android,
+        // the tap that should close an open list) open that cell's list again.
+        h("div", { class: "form-grid" }, field("Loại", kind), field("Ngày", date, quick)),
+        h("div", { class: "form-grid" }, field("Môn", subject), field("Sách / vở", book, page, "book-pick")),
+        h("div", { class: "form-grid" }, field("Lặp lại", repeat), h("span")),
         h(
           "div",
           { class: "modal-actions" },

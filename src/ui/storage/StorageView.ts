@@ -5,6 +5,7 @@ import { checkIntegrity, formatBytes, integrityProblems, measureLibrary, type In
 import { checkMarker, deviceInfo, diskTest, placeMarker, requestPersist, type DeviceInfo, type Marker } from "../../app/Diagnostics";
 import { h, icon, iconButton } from "../dom";
 import { toast } from "../feedback";
+import { BackupCard, clearBackupScratch } from "./BackupCard";
 
 /*
  * Stage 3 · v2.0 — "Kho lưu trữ": what the library takes, whether the
@@ -27,6 +28,7 @@ export class StorageView {
   private usageBox: HTMLElement;
   private integrityBox: HTMLElement;
   private deviceBox: HTMLElement;
+  private backupCard: BackupCard;
   private info: DeviceInfo | null = null;
   private usage: LibraryUsage | null = null;
   private busy = new AbortController();
@@ -36,6 +38,7 @@ export class StorageView {
     this.usageBox = h("section", { class: "st-card", "data-testid": "st-usage" });
     this.integrityBox = h("section", { class: "st-card", "data-testid": "st-integrity" });
     this.deviceBox = h("section", { class: "st-card", "data-testid": "st-device" });
+    this.backupCard = new BackupCard(deps.meta, deps.files);
     this.el = h(
       "div",
       { class: "planner storage", "data-testid": "storage" },
@@ -45,7 +48,7 @@ export class StorageView {
         iconButton("back", "Quay lại", () => deps.onBack(), "st-back"),
         h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("inbox", 24) }), h("h1", {}, "Kho lưu trữ")),
       ),
-      h("main", { class: "plan-main st-main" }, this.overview, this.usageBox, this.integrityBox, this.deviceBox),
+      h("main", { class: "plan-main st-main" }, this.overview, this.backupCard.el, this.usageBox, this.integrityBox, this.deviceBox),
     );
   }
 
@@ -54,6 +57,7 @@ export class StorageView {
     this.renderOverview();
     this.renderIntegrity(null);
     void this.renderDevice();
+    void clearBackupScratch().then(() => this.backupCard.render());
     this.usageBox.replaceChildren(h("h2", {}, "Dung lượng"), h("p", { class: "muted" }, "Đang đo…"));
     this.usage = await measureLibrary(this.deps.meta, this.deps.files);
     this.renderOverview();

@@ -1234,3 +1234,16 @@ svg.ic { stroke-width: 1.65; }
 .st-bar-val { font-variant-numeric: tabular-nums; }
 .storage .small { font-size: 13.5px; }
 @media (max-width: 700px) { .st-big { grid-template-columns: 1fr; } }
+/* task dialog fields: a caption tied to its control, the rest of the cell is inert */
+.task-form .field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--ink-soft); }
+.task-form .field > label { align-self: flex-start; cursor: pointer; }
+.task-form .field.book-pick { display: grid !important; grid-template-columns: 1fr 90px; align-items: end; column-gap: 8px; }
+.task-form .field.book-pick > label { grid-column: 1 / -1; }
+
+/* v2.1 — backup & restore */
+.st-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+.bk-progress { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
+.bk-progress[hidden] { display: none; }
+.bk-progress progress { flex: 1 1 160px; height: 8px; accent-color: var(--accent); }
+.bk-dialog .field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--ink-soft); margin-top: 10px; }
+.bk-dialog .text-input { width: 100%; }

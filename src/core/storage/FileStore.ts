@@ -12,6 +12,8 @@ export interface FileStore {
   delete(id: string): Promise<void>;
   /** Names of every stored file (for integrity checks). */
   list(): Promise<string[]>;
+  /** Writes a file from chunks as they come (restoring a backup: never whole in memory on disk stores). */
+  writeChunks(id: string, chunks: AsyncIterable<Uint8Array>): Promise<void>;
 }
 
 /** Origin Private File System: real files on disk, read lazily by slice. */
@@ -63,6 +65,19 @@ export class OpfsFileStore implements FileStore {
     await dir.removeEntry(id).catch(() => {});
   }
 
+  async writeChunks(id: string, chunks: AsyncIterable<Uint8Array>): Promise<void> {
+    const dir = await this.dir();
+    const h = await dir.getFileHandle(id, { create: true });
+    const w = await h.createWritable();
+    try {
+      for await (const c of chunks) await w.write(c as BufferSource);
+      await w.close();
+    } catch (e) {
+      await w.abort().catch(() => {});
+      throw e;
+    }
+  }
+
   async list(): Promise<string[]> {
     const dir = await this.dir();
     const out: string[] = [];
@@ -90,6 +105,12 @@ export class IdbFileStore implements FileStore {
     await tx(STORES.blobs, "readwrite", (s) => s.delete(id));
   }
 
+  async writeChunks(id: string, chunks: AsyncIterable<Uint8Array>): Promise<void> {
+    const parts: BlobPart[] = [];
+    for await (const c of chunks) parts.push(c.slice());
+    await this.write(id, new Blob(parts));
+  }
+
   async list(): Promise<string[]> {
     return (await tx<IDBValidKey[]>(STORES.blobs, "readonly", (s) => s.getAllKeys())).map(String);
   }
@@ -112,6 +133,12 @@ export class MemoryFileStore implements FileStore {
 
   async delete(id: string): Promise<void> {
     this.files.delete(id);
+  }
+
+  async writeChunks(id: string, chunks: AsyncIterable<Uint8Array>): Promise<void> {
+    const parts: BlobPart[] = [];
+    for await (const c of chunks) parts.push(c.slice());
+    await this.write(id, new Blob(parts));
   }
 
   async list(): Promise<string[]> {
