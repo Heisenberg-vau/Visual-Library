@@ -198,16 +198,22 @@ export class LibraryView {
     });
   }
 
+  private refreshGen = 0;
+
   async refresh(): Promise<void> {
     if (!this.viewLoaded) {
       this.viewLoaded = true;
       this.view = await this.deps.loadView();
     }
-    [this.books, this.categories, this.reading] = await Promise.all([
+    const gen = ++this.refreshGen;
+    const [books, categories, reading] = await Promise.all([
       this.deps.library.list(),
       this.deps.library.listCategories(),
       this.deps.loadReading(),
     ]);
+    // two refreshes in flight: an older read must not paint over a newer one
+    if (gen !== this.refreshGen) return;
+    [this.books, this.categories, this.reading] = [books, categories, reading];
     // Starred books first, otherwise most recently used.
     this.books.sort((a, b) => Number(b.favorite) - Number(a.favorite));
     void this.goalRing.refresh();
@@ -435,8 +441,9 @@ export class LibraryView {
     const isSel = this.selected.has(b.id);
     const card = h(
       "article",
-      { class: `card ${isSel ? "selected" : ""}`, tabindex: 0, "data-testid": "book-card", "data-id": b.id },
+      { class: `card ${isSel ? "selected" : ""} ${b.cold ? "is-cold" : ""}`, tabindex: 0, "data-testid": "book-card", "data-id": b.id },
       cover,
+      b.cold ? h("span", { class: "cold-badge", "data-testid": "cold-badge", title: "Đang ở kho lạnh: mở để đưa file về" }, "❄ kho lạnh") : null,
       this.selecting ? h("span", { class: "card-check", html: isSel ? icon("check", 18) : "" }) : null,
       h(
         "div",
@@ -576,6 +583,7 @@ export class LibraryView {
     for (const r of results) {
       if (r.status === "error") toast(`${r.fileName}: ${r.message}`, "error", 6000);
       if (r.status === "duplicate") toast(`“${r.book.title}” đã có trên kệ.`);
+      if (r.status === "returned") toast(r.from === "cold" ? `“${r.book.title}” đã ra khỏi kho lạnh, ghi chú còn nguyên.` : `“${r.book.title}” được lấy lại từ thùng rác, ghi chú còn nguyên.`);
     }
     if (added) {
       const where = target ? ` vào “${pathOf(this.categories, target).map((c) => c.name).join(" › ")}”` : "";
@@ -726,7 +734,7 @@ export class LibraryView {
     const first = this.books.find((b) => b.id === ids[0]);
     const ok = await confirmDialog(
       ids.length === 1 ? "Xóa khỏi kệ?" : `Xóa ${ids.length} tài liệu khỏi kệ?`,
-      `${ids.length === 1 ? `“${first?.title}”` : `${ids.length} tài liệu`} sẽ bị xóa khỏi app (bản lưu trong app). File gốc ở nơi khác trên máy không bị ảnh hưởng.`,
+      `${ids.length === 1 ? `“${first?.title}”` : `${ids.length} tài liệu`} sẽ vào thùng rác (Kho lưu trữ) cùng mọi ghi chú, lấy lại được trong 30 ngày.`,
       "Xóa",
       true,
     );
@@ -737,7 +745,13 @@ export class LibraryView {
       if (url) URL.revokeObjectURL(url);
       this.coverUrls.delete(id);
     }
-    toast(ids.length === 1 ? "Đã xóa." : `Đã xóa ${ids.length} tài liệu.`);
+    toast(ids.length === 1 ? "Đã chuyển vào thùng rác." : `Đã chuyển ${ids.length} tài liệu vào thùng rác.`, "info", 6000, {
+      label: "Hoàn tác",
+      run: async () => {
+        for (const id of ids) await this.deps.library.untrash(id);
+        await this.refresh();
+      },
+    });
     if (this.selecting) this.setSelecting(false);
     await this.refresh();
   }

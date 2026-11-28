@@ -21,6 +21,8 @@ export interface WorldBook {
   cloth: boolean;
   ribbon: boolean;
   favorite: boolean;
+  /** In cold storage: frosted spine. */
+  cold?: boolean;
   cover: () => Promise<Blob | undefined>;
 }
 export interface WorldTier {
@@ -88,6 +90,8 @@ const STACK_Z = -3.6;
 /** Stack spacing: the aisle must hold the camera (1.75 m from the books) clear of the stack behind it. */
 const STACK_DX = 2.6;
 const STACK_X0 = 1.5;
+/** Widest stretch of room the hall view frames (m). */
+const HALL_SPAN_MAX = 16.5;
 const BOOK_D = 0.2;
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -885,6 +889,7 @@ export class LibraryWorld {
             pos: new THREE.Vector3(-(W / 2 - BOOK_D / 2 - 0.015), shelfTop + h / 2, z + t / 2),
             ribbon: b.ribbon,
             favorite: b.favorite,
+            cold: b.cold,
           });
           data.push(b);
           z += t + 0.003;
@@ -913,10 +918,12 @@ export class LibraryWorld {
         return { pos: new THREE.Vector3(x - 1.75, 0.98, STACK_Z + this.along), look: new THREE.Vector3(x, 0.95, STACK_Z + this.along), fov: 58 };
       }
     }
-    // hall: frame the desk, the board and every stack
+    // hall: frame the desk, the board and the stacks, but never so far that it all
+    // shrinks to a strip (12 stacks would be 22 m away): beyond ~5 stacks the
+    // hall shows the first ones and the strip below reaches the rest
     const right = this.stackInfo.length ? this.stackInfo[this.stackInfo.length - 1].x + 0.6 : 4.7;
-    const cx = (-4.8 + right) / 2;
-    const span = right + 4.8;
+    const span = Math.min(right + 4.8, HALL_SPAN_MAX);
+    const cx = -4.8 + span / 2;
     const dist = Math.max(4.6, span * 0.62);
     return { pos: new THREE.Vector3(cx, 2.35, -3.2 + dist + 2.2), look: new THREE.Vector3(cx, 1.0, -3.2), fov: 50 };
   }
@@ -965,7 +972,7 @@ export class LibraryWorld {
   private bookMesh(p: Placed): THREE.Mesh {
     if (p.mesh) return p.mesh;
     const sb = p.shelf;
-    const spine = new THREE.MeshStandardMaterial({ map: spineTexture(sb.title, sb.color, hash(sb.id), this.spineStyle, sb.cloth), roughness: 0.5 });
+    const spine = new THREE.MeshStandardMaterial({ map: spineTexture(sb.title, sb.color, hash(sb.id), this.spineStyle, sb.cloth, !!sb.cold), roughness: 0.5 });
     const cover = new THREE.MeshStandardMaterial({ color: sb.color, roughness: 0.5 });
     const plain = new THREE.MeshStandardMaterial({ color: sb.color, roughness: 0.55 });
     // faces: +x, -x (spine), +y, -y, +z (cover), -z

@@ -67,6 +67,11 @@ export interface BookUsage {
   total: number;
   /** The file could not be found. */
   missing: boolean;
+  /** In cold storage (no file on purpose) / in the trash. */
+  cold?: boolean;
+  trashed?: boolean;
+  lastOpenedAt?: number | null;
+  addedAt?: number;
 }
 
 export interface LibraryUsage {
@@ -91,8 +96,8 @@ export async function measureLibrary(meta: MetaStore, files: FileStore, onProgre
   const byId = new Map<string, BookUsage>();
   let i = 0;
   for (const b of list) {
-    const u: BookUsage = { id: b.id, title: b.title, kind: b.kind, categoryId: b.categoryId ?? null, file: 0, original: 0, cover: 0, notes: 0, text: 0, total: 0, missing: false };
-    if (b.kind !== "notebook") {
+    const u: BookUsage = { id: b.id, title: b.title, kind: b.kind, categoryId: b.categoryId ?? null, file: 0, original: 0, cover: 0, notes: 0, text: 0, total: 0, missing: false, cold: !!b.cold, trashed: !!b.trashedAt, lastOpenedAt: b.lastOpenedAt, addedAt: b.addedAt };
+    if (b.kind !== "notebook" && !b.cold) {
       try {
         u.file = (await files.read(b.id)).size;
       } catch {
@@ -165,7 +170,7 @@ export async function checkIntegrity(
   let i = 0;
   for (const b of list) {
     if (opts.signal?.aborted) break;
-    if (b.kind !== "notebook") {
+    if (b.kind !== "notebook" && !b.cold) {
       expected.add(b.id);
       let f: File | null = null;
       try {

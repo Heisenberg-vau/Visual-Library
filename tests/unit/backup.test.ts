@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MemoryFileStore } from "../../src/core/storage/FileStore";
 import { STORES, resetDbForTests, tx } from "../../src/core/storage/idb";
-import { applyRestore, makeBackup, pendingSinceLastBackup, planRestore, type BackupLog } from "../../src/core/backup/backup";
+import { applyRestore, filesToBackUp, makeBackup, pendingSinceLastBackup, planRestore, splitParts, type BackupLog } from "../../src/core/backup/backup";
 import { openBackup, verifyBackup } from "../../src/core/backup/container";
 
 const put = (store: string, v: unknown, key?: IDBValidKey) => tx(store, "readwrite", (s) => (key === undefined ? s.put(v) : s.put(v, key)));
@@ -110,5 +110,32 @@ describe("backup and restore", () => {
     expect((await files.list()).sort()).toEqual(["b1", "b1.orig", "big"]);
     // on another device they are not: refused by the caller via `missing`
     expect(planRestore([b], { b1: 7 }).missing.sort()).toEqual(["b1.orig", "big"]);
+  });
+
+  it("a big library goes in parts; restoring needs every part", async () => {
+    const files = new MemoryFileStore();
+    await library(files);
+    await files.write("b2", new Blob(["12345678901"]));
+    const list = await filesToBackUp("full", files, empty);
+    const parts = splitParts(list, 12);
+    expect(parts).toEqual([["b1"], ["b1.orig"], ["b2"]]);
+    expect(splitParts([], 10)).toEqual([[]]);
+    let log = empty;
+    const blobs: Blob[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const r = await makeBackup({ kind: "full", files, log, app: "t", only: parts[i], part: { n: i + 1, of: 3, set: "S" }, fileName: `p${i + 1}` });
+      log = r.log;
+      blobs.push(r.blob);
+    }
+    expect(log.files).toEqual({ b1: 7, "b1.orig": 8, b2: 11 }); // later parts add to the first
+    expect(log.names).toEqual({ b1: "p1", "b1.orig": "p2", b2: "p3" });
+    const opened = await Promise.all(blobs.map((b) => openBackup(b)));
+    expect(planRestore([opened[0], opened[2]]).partsMissing).toEqual(["2/3"]);
+    const plan = planRestore(opened);
+    expect(plan.partsMissing).toEqual([]);
+    expect(plan.missing).toEqual([]);
+    await files.delete("b2");
+    await applyRestore(plan, files);
+    expect((await files.list()).sort()).toEqual(["b1", "b1.orig", "b2"]);
   });
 });

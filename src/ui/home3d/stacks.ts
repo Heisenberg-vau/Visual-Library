@@ -15,6 +15,8 @@ export interface ShelfBook {
   author: string;
   color: string;
   cloth: boolean;
+  /** In cold storage: frosted spine. */
+  cold?: boolean;
   /** Size in metres: depth (cover width), height, thickness. */
   d: number;
   h: number;
@@ -46,7 +48,26 @@ function rng(seed: number): () => number {
 }
 
 /** Paints one spine into a cell (the same art as the single-book texture). */
-export function paintSpine(ctx: CanvasRenderingContext2D, x0: number, y0: number, W: number, H: number, title: string, color: string, seed: number, style: SpineStyle, cloth: boolean, favorite = false): void {
+/** Cold storage: rime creeping in from both ends, a pale wash over the rest (already translated to the cell). */
+export function paintFrost(ctx: CanvasRenderingContext2D, W: number, H: number, r: () => number): void {
+  ctx.fillStyle = "rgba(210,232,248,0.28)";
+  ctx.fillRect(0, 0, W, H);
+  const band = H * 0.24;
+  for (const [y0, dir] of [[0, 1], [H, -1]] as const) {
+    const g = ctx.createLinearGradient(0, y0, 0, y0 + dir * band);
+    g.addColorStop(0, "rgba(236,246,255,0.95)");
+    g.addColorStop(1, "rgba(236,246,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, dir > 0 ? 0 : H - band, W, band);
+  }
+  for (let i = 0; i < 200; i++) {
+    const y = r() < 0.5 ? r() * r() * band * 1.3 : H - r() * r() * band * 1.3;
+    ctx.fillStyle = `rgba(255,255,255,${0.35 + r() * 0.5})`;
+    ctx.fillRect(r() * W, y, 1 + r() * 2.5, 1 + r() * 2.5);
+  }
+}
+
+export function paintSpine(ctx: CanvasRenderingContext2D, x0: number, y0: number, W: number, H: number, title: string, color: string, seed: number, style: SpineStyle, cloth: boolean, favorite = false, frost = false): void {
   const r = rng(seed);
   ctx.save();
   ctx.beginPath();
@@ -130,6 +151,15 @@ export function paintSpine(ctx: CanvasRenderingContext2D, x0: number, y0: number
   }
   ctx.fillText(title, 0, 0);
   ctx.restore();
+  if (frost) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, y0, W, H);
+    ctx.clip();
+    ctx.translate(x0, y0);
+    paintFrost(ctx, W, H, rng(seed ^ 0x5f3759df));
+    ctx.restore();
+  }
 }
 
 function paintStrip(ctx: CanvasRenderingContext2D): void {
@@ -166,7 +196,7 @@ export class StackChunk {
     books.forEach((b, i) => {
       const cx = (i % COLS) * CW;
       const cy = Math.floor(i / COLS) * CH;
-      paintSpine(ctx, cx + 2, cy + 2, CW - 4, CH - 4, b.title, b.color, hash(b.id), style, b.cloth, b.favorite);
+      paintSpine(ctx, cx + 2, cy + 2, CW - 4, CH - 4, b.title, b.color, hash(b.id), style, b.cloth, b.favorite, !!b.cold);
     });
     const map = new THREE.CanvasTexture(c);
     map.colorSpace = THREE.SRGBColorSpace;

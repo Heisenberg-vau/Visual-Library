@@ -27,10 +27,13 @@ export interface DocInspector {
 
 /** Where the untouched original of a converted book (e.g. the .docx) is kept. */
 export const originalKey = (id: string) => `${id}.orig`;
+export const TRASH_DAYS = 30;
 
 export type ImportResult =
   | { status: "added"; book: BookMeta }
   | { status: "duplicate"; book: BookMeta }
+  /** The same book was in the trash or in cold storage: it is back, notes and all. */
+  | { status: "returned"; book: BookMeta; from: "trash" | "cold" }
   | { status: "error"; fileName: string; message: string };
 
 export interface ImportProgress {
@@ -60,8 +63,18 @@ export class LibraryService {
     private readonly inspector: DocInspector,
   ) {}
 
-  list(): Promise<BookMeta[]> {
+  /** Books and notebooks on the shelves (not in the trash). */
+  async list(): Promise<BookMeta[]> {
+    return (await this.meta.list()).filter((b) => !b.trashedAt);
+  }
+
+  /** Everything, trash included. */
+  listAll(): Promise<BookMeta[]> {
     return this.meta.list();
+  }
+
+  async listTrash(): Promise<BookMeta[]> {
+    return (await this.meta.list()).filter((b) => b.trashedAt).sort((a, b) => b.trashedAt! - a.trashedAt!);
   }
 
   get(id: string): Promise<BookMeta | undefined> {
@@ -118,6 +131,25 @@ export class LibraryService {
       const stored = await this.files.read(key);
       const info = await this.inspector.inspect(stored, (f) => report("inspect", Math.min(0.99, f)), converted ? "docx" : "pdf");
       const dup = info.fingerprint ? await this.meta.findByFingerprint(info.fingerprint) : undefined;
+      if (dup && (dup.cold || dup.trashedAt)) {
+        // the original of a book in cold storage or the trash: it comes back to its place
+        const from = dup.cold ? ("cold" as const) : ("trash" as const);
+        if (dup.cold) {
+          const dkey = dup.source ? originalKey(dup.id) : dup.id;
+          if (converted !== !!dup.source) throw new UserFacingError("File này khác loại với bản đã cất (PDF/Word).");
+          await this.files.write(dkey, stored);
+          if (converted) {
+            if (!info.converted) throw new UserFacingError("Không chuyển được file Word này.");
+            await this.files.write(dup.id, info.converted);
+          }
+        }
+        await this.files.delete(key).catch(() => {});
+        if (converted) await this.files.delete(id).catch(() => {});
+        await this.meta.update(dup.id, { cold: undefined, trashedAt: undefined });
+        const book = (await this.meta.get(dup.id))!;
+        if (from === "cold") for (const fn of this.onAddedHooks) fn(book);
+        return { status: "returned", book, from };
+      }
       if (dup) {
         await this.files.delete(key);
         return { status: "duplicate", book: dup };
@@ -213,7 +245,29 @@ export class LibraryService {
     if (t) await this.meta.update(id, { title: t });
   }
 
+  /** "Xóa": to the trash. Nothing is lost for 30 days. */
   async delete(id: string): Promise<void> {
+    await this.meta.update(id, { trashedAt: Date.now() });
+  }
+
+  async untrash(id: string): Promise<void> {
+    await this.meta.update(id, { trashedAt: undefined });
+  }
+
+  /** Empties trash older than `maxAgeMs` (all of it with 0). Returns how many went. */
+  async purgeTrash(maxAgeMs = TRASH_DAYS * 86_400_000, now = Date.now()): Promise<number> {
+    let n = 0;
+    for (const b of await this.listTrash()) {
+      if (now - b.trashedAt! >= maxAgeMs) {
+        await this.purge(b.id);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** Gone for good: files, record, notes, text, progress. */
+  async purge(id: string): Promise<void> {
     await this.files.delete(id).catch(() => {}); // notebooks have no file
     await this.files.delete(originalKey(id)).catch(() => {});
     await this.meta.delete(id);
@@ -224,6 +278,92 @@ export class LibraryService {
   private onDeleteHooks: ((id: string) => Promise<void>)[] = [];
   onDelete(fn: (id: string) => Promise<void>): void {
     this.onDeleteHooks.push(fn);
+  }
+
+  // ---- after an interruption (v2.4) ------------------------------------
+
+  /**
+   * Run once at start, before anything else writes. Finishes what a closed
+   * app or a dead battery left half done:
+   * - a file copied in without its book record (import, restore) is removed;
+   * - a cold book whose files are all present again is back (thaw finished
+   *   writing, the flag was not cleared); one with only some files present
+   *   loses the leftovers (freeze or thaw stopped half way).
+   * A file being written exists but stays empty until done, so sizes are checked.
+   */
+  async repairOnStart(): Promise<{ removed: string[]; thawed: string[] }> {
+    const list = await this.meta.list();
+    const present = new Set(await this.files.list());
+    const expected = new Set<string>();
+    const removed: string[] = [];
+    const thawed: string[] = [];
+    for (const b of list) {
+      if (b.kind === "notebook") continue;
+      const need = [b.id, ...(b.source ? [originalKey(b.id)] : [])];
+      if (b.cold) {
+        // a file being written shows up empty until it is complete: whole = right size
+        const whole = async (n: string) => {
+          if (!present.has(n)) return false;
+          const size = await this.files.read(n).then((f) => f.size, () => -1);
+          return n === (b.source ? originalKey(b.id) : b.id) ? size === b.size : size > 0;
+        };
+        let all = true;
+        for (const n of need) if (!(await whole(n))) all = false;
+        if (all) {
+          await this.meta.update(b.id, { cold: undefined });
+          thawed.push(b.id);
+          need.forEach((n) => expected.add(n));
+        }
+        // partial: leave the names out of `expected`, they go below
+      } else need.forEach((n) => expected.add(n));
+    }
+    for (const name of present) {
+      if (expected.has(name)) continue;
+      await this.files.delete(name).catch(() => {});
+      removed.push(name);
+    }
+    return { removed, thawed };
+  }
+
+  // ---- cold storage (v2.3) -------------------------------------------
+
+  /** Takes a book's file(s) off the device; notes, cover, place and progress stay. */
+  async freeze(id: string, backup?: string): Promise<void> {
+    const b = await this.meta.get(id);
+    if (!b || b.kind === "notebook" || b.cold) return;
+    await this.meta.update(id, { cold: { at: Date.now(), ...(backup ? { backup } : {}) } });
+    await this.files.delete(id).catch(() => {});
+    await this.files.delete(originalKey(id)).catch(() => {});
+  }
+
+  /**
+   * Brings a cold book back from the file the user picked: the same PDF, or
+   * for a Word book the same .docx (converted again). Anything else is refused.
+   */
+  async thaw(id: string, file: File, fingerprintOf: (f: Blob) => Promise<string>): Promise<void> {
+    const b = await this.meta.get(id);
+    if (!b?.cold) return;
+    const isDocx = /\.docx$/i.test(file.name) || file.type.includes("wordprocessingml");
+    if (!!b.source !== isDocx) throw new UserFacingError(b.source ? "Sách này nhập từ Word: hãy chọn đúng file .docx gốc." : "Hãy chọn đúng file PDF gốc của sách này.");
+    if ((await fingerprintOf(file)) !== b.fingerprint) throw new UserFacingError("File này không phải bản gốc của sách (nội dung khác).");
+    if (b.source) {
+      await this.files.write(originalKey(id), file);
+      const info = await this.inspector.inspect(await this.files.read(originalKey(id)), undefined, "docx");
+      if (!info.converted) throw new UserFacingError("Không chuyển được file Word này.");
+      await this.files.write(id, info.converted);
+    } else {
+      await this.files.write(id, file);
+    }
+    await this.meta.update(id, { cold: undefined });
+  }
+
+  /** Brings a cold book back with bytes taken from a backup (already checked against its hash). */
+  async thawFromBackup(id: string, file: Blob, original?: Blob): Promise<void> {
+    const b = await this.meta.get(id);
+    if (!b?.cold) return;
+    await this.files.write(id, file);
+    if (original) await this.files.write(originalKey(id), original);
+    await this.meta.update(id, { cold: undefined });
   }
 
   async setMargins(id: string, margins: BookMeta["margins"]): Promise<void> {

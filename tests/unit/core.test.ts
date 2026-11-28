@@ -199,8 +199,12 @@ describe("LibraryService", () => {
     await svc.savePosition(r.book.id, 7, 1.5);
     const b = await svc.get(r.book.id);
     expect(b).toMatchObject({ title: "Sách mới", lastPage: 7, zoom: 1.5 });
-    await svc.delete(r.book.id);
+    await svc.delete(r.book.id); // to the trash: hidden, file kept
     expect(await svc.list()).toHaveLength(0);
+    expect((await svc.listTrash()).map((b) => b.id)).toEqual([r.book.id]);
+    expect((await files.read(r.book.id)).size).toBeGreaterThan(0);
+    await svc.purge(r.book.id);
+    expect(await svc.listAll()).toHaveLength(0);
     await expect(files.read(r.book.id)).rejects.toThrow();
   });
 

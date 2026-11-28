@@ -1,7 +1,7 @@
 import type { FileStore } from "../../core/storage/FileStore";
 import type { MetaStore } from "../../core/storage/MetaStore";
 import { formatBytes } from "../../core/storage/StorageReport";
-import { BACKUP_LOG_KEY, applyRestore, makeBackup, pendingSinceLastBackup, planRestore, type BackupKind, type BackupLog } from "../../core/backup/backup";
+import { BACKUP_LOG_KEY, applyRestore, filesToBackUp, makeBackup, pendingSinceLastBackup, planRestore, splitParts, type BackupKind, type BackupLog } from "../../core/backup/backup";
 import { BackupError, needsPassword, openBackup, verifyBackup, type OpenedBackup } from "../../core/backup/container";
 import { h } from "../dom";
 import { confirmDialog, modal, toast } from "../feedback";
@@ -14,6 +14,8 @@ import { confirmDialog, modal, toast } from "../feedback";
 
 declare const __APP_VERSION__: string;
 const TMP_DIR = "backup-tmp";
+/** Largest part of a backup (MB). */
+const PART_MB = 2048;
 const KIND_NAME: Record<BackupKind, string> = { full: "toàn bộ", new: "phần mới", notes: "ghi chú & kế hoạch" };
 
 const when = (t: number) =>
@@ -76,6 +78,7 @@ async function askNewPassword(kind: BackupKind): Promise<{ password: string } | 
       h("label", { class: "field" }, "Mật khẩu (để trống nếu không khóa)", p1),
       h("label", { class: "field" }, "Nhập lại mật khẩu", p2),
       h("p", { class: "muted small" }, "⚠ Quên mật khẩu là mất bản sao lưu đó: không có cách lấy lại. Hãy ghi mật khẩu ở chỗ an toàn."),
+      kind !== "notes" ? h("p", { class: "muted small" }, "Bản có khóa cần chỗ trống tạm trên máy bằng kích thước của nó (được dọn ở lần mở Kho lưu trữ sau). Thư viện lớn được chia thành nhiều file ≤ 2 GB: trình duyệt có thể hỏi “cho phép tải nhiều file” – hãy đồng ý.") : null,
       err,
       h(
         "div",
@@ -96,7 +99,7 @@ async function askNewPassword(kind: BackupKind): Promise<{ password: string } | 
   return (r as { password: string } | null) ?? null;
 }
 
-async function askPassword(fileName: string, wrong: boolean): Promise<string | null> {
+export async function askPassword(fileName: string, wrong: boolean): Promise<string | null> {
   const r = await modal((close) => {
     const p = h("input", { class: "text-input", type: "password", autocomplete: "off", "data-testid": "bk-open-pass" });
     const form = h(
@@ -131,7 +134,8 @@ export class BackupCard {
   constructor(
     private readonly meta: MetaStore,
     private readonly files: FileStore,
-    private readonly onRestored: () => void = () => location.reload(),
+    // back to the hall on a fresh start (not to #storage)
+    private readonly onRestored: () => void = () => (location.hash ? location.replace(location.pathname + location.search) : location.reload()),
   ) {
     this.el = h("section", { class: "st-card", "data-testid": "st-backup" });
   }
@@ -205,35 +209,77 @@ export class BackupCard {
     if (!ask) return;
     this.job = new AbortController();
     this.setBusy(true);
-    const id = crypto.randomUUID();
+    const password = ask.password || undefined;
+    const base = `visual-library-${stamp(Date.now())}-${kind}${password ? "-khoa" : ""}`;
+    const made: { blob: Blob; name: string }[] = [];
     try {
-      const out = ask.password ? await diskOut(id) : null;
-      const { blob, log } = await makeBackup({
-        kind,
-        files: this.files,
-        log: this.log,
-        app: `Visual Library ${__APP_VERSION__}`,
-        password: ask.password || undefined,
-        cipherOut: out ? () => out : undefined,
-        signal: this.job.signal,
-        onProgress: (p) =>
-          this.progress(
-            p.phase === "db" ? "Đang gom ghi chú, kế hoạch, kệ sách…" : p.phase === "files" ? `Đang chép sách: ${formatBytes(p.done)} / ${formatBytes(p.total)}` : "Đang hoàn tất…",
-            p.phase === "files" && p.total ? p.done / p.total : null,
-          ),
-      });
-      // check the file before handing it over
-      this.progress("Đang kiểm tra bản sao lưu…", null);
-      const opened = await openBackup(blob, ask.password || undefined);
-      const bad = await verifyBackup(opened, undefined, this.job.signal);
-      if (bad.length) throw new BackupError(`Bản sao lưu vừa tạo không khớp (${bad.length} mục). Hãy thử lại.`);
-      const name = `visual-library-${stamp(Date.now())}-${kind}${ask.password ? "-khoa" : ""}.vlbak`;
-      download(blob, name);
-      await this.meta.setSetting(BACKUP_LOG_KEY, log);
-      (window as unknown as { __lastBackup?: { blob: Blob; name: string } }).__lastBackup = { blob, name };
-      toast(`Đã tạo “${name}” (${formatBytes(blob.size)}). Nhớ chép file này sang chỗ khác.`, "info", 8000);
+      this.progress("Đang chuẩn bị…", null);
+      // big libraries go in parts of ~2 GB: easier to copy (USB, cloud), and one bad copy loses less
+      const list = await filesToBackUp(kind, this.files, this.log);
+      const limit = ((window as unknown as { __backupPartMB?: number }).__backupPartMB ?? PART_MB) * 1024 * 1024;
+      const parts = splitParts(list, limit);
+      const set = crypto.randomUUID();
+      const sizeOf = new Map(list.map((f) => [f.name, f.size]));
+      const grand = list.reduce((n, f) => n + f.size, 0);
+      let before = 0;
+      let log = this.log;
+      for (let i = 0; i < parts.length; i++) {
+        const tag = parts.length > 1 ? ` (phần ${i + 1}/${parts.length})` : "";
+        const name = `${base}${parts.length > 1 ? `-p${i + 1}of${parts.length}` : ""}.vlbak`;
+        const out = password ? await diskOut(`${set}-${i}`) : null;
+        const r = await makeBackup({
+          kind,
+          files: this.files,
+          log,
+          app: `Visual Library ${__APP_VERSION__}`,
+          password,
+          fileName: name,
+          only: parts[i],
+          part: parts.length > 1 ? { n: i + 1, of: parts.length, set } : undefined,
+          cipherOut: out ? () => out : undefined,
+          signal: this.job.signal,
+          onProgress: (p) =>
+            this.progress(
+              p.phase === "db" ? `Đang gom ghi chú, kế hoạch, kệ sách…${tag}` : p.phase === "files" ? `Đang chép sách${tag}: ${formatBytes(before + p.done)} / ${formatBytes(grand)}` : `Đang hoàn tất${tag}…`,
+              p.phase === "files" && grand ? (before + p.done) / grand : null,
+            ),
+        });
+        // check the file before handing it over
+        this.progress(`Đang kiểm tra bản sao lưu${tag}…`, null);
+        const bad = await verifyBackup(await openBackup(r.blob, password), undefined, this.job.signal);
+        if (bad.length) throw new BackupError(`Bản sao lưu vừa tạo không khớp (${bad.length} mục). Hãy thử lại.`);
+        download(r.blob, name);
+        made.push({ blob: r.blob, name });
+        // each finished part counts, even if a later one fails
+        log = r.log;
+        await this.meta.setSetting(BACKUP_LOG_KEY, log);
+        before += parts[i].reduce((n, f) => n + (sizeOf.get(f) ?? 0), 0);
+      }
+      const w = window as unknown as { __lastBackup?: { blob: Blob; name: string }; __lastBackups?: { blob: Blob; name: string }[] };
+      w.__lastBackup = made[made.length - 1];
+      w.__lastBackups = made;
+      const total = made.reduce((n, m) => n + m.blob.size, 0);
+      toast(
+        made.length > 1
+          ? `Đã tạo ${made.length} file sao lưu (tổng ${formatBytes(total)}). Cần giữ đủ cả ${made.length} phần. Nhớ chép chúng sang chỗ khác.`
+          : `Đã tạo “${made[0].name}” (${formatBytes(total)}). Nhớ chép file này sang chỗ khác.`,
+        "info",
+        9000,
+      );
     } catch (e) {
-      toast(this.job.signal.aborted ? "Đã dừng sao lưu." : e instanceof Error ? e.message : "Sao lưu thất bại.", "error", 7000);
+      const full = e instanceof DOMException && e.name === "QuotaExceededError";
+      toast(
+        this.job.signal.aborted
+          ? "Đã dừng sao lưu."
+          : full
+            ? "Máy hết chỗ trống trong lúc tạo bản sao lưu có khóa (bản có khóa cần chỗ tạm bằng kích thước của nó). Hãy dọn bớt, dùng kho lạnh, hoặc sao lưu không khóa."
+            : e instanceof Error
+              ? e.message
+              : "Sao lưu thất bại.",
+        "error",
+        9000,
+      );
+      if (made.length) toast(`${made.length} phần đầu đã tải xong và vẫn dùng được.`, "info", 7000);
     } finally {
       this.job = null;
       await this.render();
@@ -277,6 +323,9 @@ export class BackupCard {
       const local: Record<string, number> = {};
       for (const n of await this.files.list()) local[n] = (await this.files.read(n)).size;
       const plan = planRestore(opened, local);
+      if (plan.partsMissing.length) {
+        throw new BackupError(`Bản sao lưu này chia thành nhiều phần; còn thiếu phần ${plan.partsMissing.join(", ")}. Hãy chọn đủ các phần cùng lúc.`);
+      }
       if (plan.missing.length) {
         throw new BackupError(
           `Thiếu ${plan.missing.length} file sách mà các bản đã chọn không có. Hãy chọn cùng lúc bản sao lưu toàn bộ và mọi bản “phần mới” sau nó.`,

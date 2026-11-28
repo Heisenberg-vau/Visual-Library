@@ -417,10 +417,11 @@ export async function openBackup(file: Blob, password?: string): Promise<OpenedB
   };
 }
 
-/** Re-reads every entry and compares its hash. Returns the names that do not match. */
-export async function verifyBackup(b: OpenedBackup, onBytes?: (n: number) => void, signal?: AbortSignal): Promise<string[]> {
+/** Re-reads every entry (or only `only`) and compares its hash. Returns the names that do not match. */
+export async function verifyBackup(b: OpenedBackup, onBytes?: (n: number) => void, signal?: AbortSignal, only?: string[]): Promise<string[]> {
   const bad: string[] = [];
   for (const e of b.manifest.entries) {
+    if (only && !only.includes(e.name)) continue;
     const hs = new BlockHasher();
     try {
       for await (const chunk of b.read(e, onBytes)) {

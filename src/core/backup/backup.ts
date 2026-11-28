@@ -27,6 +27,8 @@ export interface BackupLog {
   last: { id: string; at: number; kind: BackupKind; size: number; locked: boolean } | null;
   /** Files already in some backup (name → size). */
   files: Record<string, number>;
+  /** Which backup file holds each of them (name → file name of the backup). */
+  names?: Record<string, string>;
 }
 
 export interface Manifest {
@@ -42,6 +44,7 @@ export interface Manifest {
   /** Every file the library had (to tell what a restore still needs). */
   libraryFiles: Record<string, number>;
   stores: string[];
+  part?: { n: number; of: number; set: string };
   entries: EntryInfo[];
 }
 
@@ -73,6 +76,12 @@ export async function makeBackup(opts: {
   cipherOut?: () => { write(b: Uint8Array): Promise<void>; close(): Promise<Blob> };
   plainSink?: () => Sink;
   iterations?: number;
+  /** The name the backup will be saved under (remembered per file, for cold storage). */
+  fileName?: string;
+  /** Only these files (one part of a backup split in several files). */
+  only?: string[];
+  /** Part n of `of`, all sharing `set`. */
+  part?: { n: number; of: number; set: string };
   onProgress?: (p: BackupProgress) => void;
   signal?: AbortSignal;
 }): Promise<{ blob: Blob; manifest: Manifest; log: BackupLog }> {
@@ -109,19 +118,54 @@ export async function makeBackup(opts: {
     libraryFiles[n] = f.size;
     sizes.set(n, f);
   }
-  const take = opts.kind === "notes" ? [] : names.filter((n) => opts.kind === "full" || opts.log.files[n] !== libraryFiles[n]);
+  const take = opts.only ?? (opts.kind === "notes" ? [] : names.filter((n) => opts.kind === "full" || opts.log.files[n] !== libraryFiles[n]));
   const total = take.reduce((s, n) => s + libraryFiles[n], 0);
   let done = 0;
   for (const n of take) {
     await w.addBlob(`file/${n}`, sizes.get(n)!, (k) => opts.onProgress?.({ phase: "files", done: (done += k), total }));
   }
   opts.onProgress?.({ phase: "finish", done: 1, total: 1 });
-  const manifest = { format: 1 as const, id, kind: opts.kind, createdAt: Date.now(), app: opts.app, books, notebooks, files: take, libraryFiles, stores: DB_STORES };
+  const manifest = { format: 1 as const, id, kind: opts.kind, createdAt: Date.now(), app: opts.app, books, notebooks, files: take, libraryFiles, stores: DB_STORES, ...(opts.part ? { part: opts.part } : {}) };
   const blob = await w.finish(manifest);
-  const files = opts.kind === "full" ? {} : { ...opts.log.files };
-  for (const n of take) files[n] = libraryFiles[n];
-  const log: BackupLog = { last: { id, at: manifest.createdAt, kind: opts.kind, size: blob.size, locked: !!opts.password }, files };
+  // a full backup starts the record afresh (its later parts add to it)
+  const fresh = opts.kind === "full" && (opts.part?.n ?? 1) === 1;
+  const files = fresh ? {} : { ...opts.log.files };
+  const where: Record<string, string> = fresh ? {} : { ...(opts.log.names ?? {}) };
+  for (const n of take) {
+    files[n] = libraryFiles[n];
+    if (opts.fileName) where[n] = opts.fileName;
+  }
+  const log: BackupLog = { last: { id, at: manifest.createdAt, kind: opts.kind, size: blob.size, locked: !!opts.password }, files, names: where };
   return { blob, manifest: { ...manifest, entries: [] }, log };
+}
+
+/** The files a backup of this kind would carry, with their sizes. */
+export async function filesToBackUp(kind: BackupKind, files: FileStore, log: BackupLog): Promise<{ name: string; size: number }[]> {
+  if (kind === "notes") return [];
+  const out: { name: string; size: number }[] = [];
+  for (const name of await files.list()) {
+    const size = (await files.read(name)).size;
+    if (kind === "full" || log.files[name] !== size) out.push({ name, size });
+  }
+  return out;
+}
+
+/** Splits files into parts of at most `limit` bytes (a bigger single file gets a part of its own). */
+export function splitParts(list: { name: string; size: number }[], limit: number): string[][] {
+  const parts: string[][] = [];
+  let cur: string[] = [];
+  let bytes = 0;
+  for (const f of list) {
+    if (cur.length && bytes + f.size > limit) {
+      parts.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(f.name);
+    bytes += f.size;
+  }
+  if (cur.length || !parts.length) parts.push(cur);
+  return parts;
 }
 
 /** What has changed since the last backup (for "Sao lưu phần mới"). */
@@ -143,6 +187,8 @@ export async function pendingSinceLastBackup(files: FileStore, log: BackupLog): 
 export interface RestorePlan {
   /** The backup whose database is restored (the newest). */
   base: OpenedBackup;
+  /** Parts of a split backup that were not chosen (e.g. "2/3"). */
+  partsMissing: string[];
   books: number;
   notebooks: number;
   createdAt: number;
@@ -171,7 +217,18 @@ export function planRestore(backups: OpenedBackup[], local: Record<string, numbe
   const need = Object.entries(m.libraryFiles ?? {}).filter(([n]) => !files.has(n));
   const keep = need.filter(([n, size]) => local[n] === size).map(([n]) => n);
   const missing = need.filter(([n, size]) => local[n] !== size).map(([n]) => n);
-  return { base, books: m.books, notebooks: m.notebooks, createdAt: m.createdAt, files, keep, missing };
+  // parts of split backups: which of each set were chosen
+  const sets = new Map<string, { of: number; have: Set<number> }>();
+  for (const b of backups) {
+    const p = (b.manifest as unknown as Manifest).part;
+    if (!p) continue;
+    const s = sets.get(p.set) ?? { of: p.of, have: new Set<number>() };
+    s.have.add(p.n);
+    sets.set(p.set, s);
+  }
+  const partsMissing: string[] = [];
+  for (const s of sets.values()) for (let n = 1; n <= s.of; n++) if (!s.have.has(n)) partsMissing.push(`${n}/${s.of}`);
+  return { base, books: m.books, notebooks: m.notebooks, createdAt: m.createdAt, files, keep, missing, partsMissing };
 }
 
 /** The books in a backup's database (for the confirmation). */

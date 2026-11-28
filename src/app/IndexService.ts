@@ -74,7 +74,7 @@ export class IndexService {
   /** Queue every PDF that is not fully indexed yet (on app start). */
   async enqueueAll(): Promise<void> {
     for (const b of await this.library.list()) {
-      if (b.kind === "pdf" && !b.indexDone) this.enqueue(b.id);
+      if (b.kind === "pdf" && !b.indexDone && !b.cold) this.enqueue(b.id);
     }
   }
 

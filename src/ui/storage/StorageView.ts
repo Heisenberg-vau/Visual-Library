@@ -1,6 +1,9 @@
 import type { Category } from "../../core/types";
 import type { FileStore } from "../../core/storage/FileStore";
 import type { MetaStore } from "../../core/storage/MetaStore";
+import type { LibraryService } from "../../core/storage/LibraryService";
+import { removeOrphans } from "../../core/storage/cleanup";
+import { CleanupCard } from "./CleanupCard";
 import { checkIntegrity, formatBytes, integrityProblems, measureLibrary, type IntegrityReport, type LibraryUsage } from "../../core/storage/StorageReport";
 import { checkMarker, deviceInfo, diskTest, placeMarker, requestPersist, type DeviceInfo, type Marker } from "../../app/Diagnostics";
 import { h, icon, iconButton } from "../dom";
@@ -17,7 +20,10 @@ import { BackupCard, clearBackupScratch } from "./BackupCard";
 export interface StorageViewDeps {
   meta: MetaStore;
   files: FileStore;
+  library: LibraryService;
   onBack: () => void;
+  clearIndex: () => Promise<void>;
+  beforeFreeze: (id: string) => Promise<void>;
 }
 
 const MARKER_KEY = "diagMarker";
@@ -29,6 +35,7 @@ export class StorageView {
   private integrityBox: HTMLElement;
   private deviceBox: HTMLElement;
   private backupCard: BackupCard;
+  private cleanup: CleanupCard;
   private info: DeviceInfo | null = null;
   private usage: LibraryUsage | null = null;
   private busy = new AbortController();
@@ -39,6 +46,7 @@ export class StorageView {
     this.integrityBox = h("section", { class: "st-card", "data-testid": "st-integrity" });
     this.deviceBox = h("section", { class: "st-card", "data-testid": "st-device" });
     this.backupCard = new BackupCard(deps.meta, deps.files);
+    this.cleanup = new CleanupCard({ ...deps, changed: () => this.remeasure() });
     this.el = h(
       "div",
       { class: "planner storage", "data-testid": "storage" },
@@ -48,7 +56,7 @@ export class StorageView {
         iconButton("back", "Quay lại", () => deps.onBack(), "st-back"),
         h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("inbox", 24) }), h("h1", {}, "Kho lưu trữ")),
       ),
-      h("main", { class: "plan-main st-main" }, this.overview, this.backupCard.el, this.usageBox, this.integrityBox, this.deviceBox),
+      h("main", { class: "plan-main st-main" }, this.overview, this.backupCard.el, this.usageBox, this.cleanup.trashEl, this.cleanup.coldEl, this.cleanup.dupEl, this.integrityBox, this.deviceBox),
     );
   }
 
@@ -62,6 +70,16 @@ export class StorageView {
     this.usage = await measureLibrary(this.deps.meta, this.deps.files);
     this.renderOverview();
     await this.renderUsage();
+    await this.cleanup.render(this.usage);
+  }
+
+  /** After a cleanup step: sizes, backup state and the lists again. */
+  private async remeasure(): Promise<void> {
+    this.usage = await measureLibrary(this.deps.meta, this.deps.files);
+    this.renderOverview();
+    await this.renderUsage();
+    await this.cleanup.render(this.usage);
+    await this.backupCard.render();
   }
 
   destroy(): void {
@@ -161,7 +179,7 @@ export class StorageView {
             ...u.books.map((b) =>
               row(
                 [
-                  h("span", {}, b.kind === "notebook" ? "📓 " : "", b.title, b.missing ? h("b", { class: "st-bad" }, " · mất file") : ""),
+                  h("span", {}, b.kind === "notebook" ? "📓 " : "", b.title, b.missing ? h("b", { class: "st-bad" }, " · mất file") : "", b.cold ? h("span", { class: "muted" }, " · ❄ kho lạnh") : "", b.trashed ? h("span", { class: "muted" }, " · 🗑 thùng rác") : ""),
                   formatBytes(b.file + b.original),
                   formatBytes(b.notes),
                   formatBytes(b.text),
@@ -185,7 +203,7 @@ export class StorageView {
     deep.addEventListener("click", () => void this.runCheck(true));
     const body: (HTMLElement | null)[] = [
       h("h2", {}, "Kiểm tra toàn vẹn"),
-      h("p", { class: "muted small" }, "Chỉ xem và báo cáo, không sửa hay xóa gì. “Kiểm tra kỹ” đọc lại phần đầu và cuối của mọi file để so với lúc nhập (với thư viện lớn có thể mất vài phút)."),
+      h("p", { class: "muted small" }, "Chỉ xem và báo cáo; dữ liệu mồ côi (không thuộc sách nào) có nút dọn riêng. “Kiểm tra kỹ” đọc lại phần đầu và cuối của mọi file để so với lúc nhập (với thư viện lớn có thể mất vài phút)."),
       h("div", { class: "st-row" }, quick, deep),
     ];
     if (progress) body.push(h("p", { class: "muted", "data-testid": "st-check-progress" }, progress));
@@ -200,11 +218,30 @@ export class StorageView {
         if (r.orphanFiles.length) items.push(h("li", {}, `${r.orphanFiles.length} file không thuộc sách nào (${formatBytes(r.orphanFiles.reduce((s, f) => s + f.size, 0))}).`));
         for (const o of r.orphanRecords) items.push(h("li", {}, `${o.store}: ${o.count} mục của sách đã xóa (${formatBytes(o.bytes)}).`));
         body.push(
-          h("div", { class: "st-warn", "data-testid": "st-check-result" }, h("p", {}, `Thấy ${n} vấn đề:`), h("ul", {}, ...items), h("p", { class: "small" }, "Chưa có gì bị sửa. Công cụ dọn dẹp và khôi phục có ở các mốc v2.1 (sao lưu) và v2.3 (dọn dẹp).")),
+          h(
+            "div",
+            { class: "st-warn", "data-testid": "st-check-result" },
+            h("p", {}, `Thấy ${n} vấn đề:`),
+            h("ul", {}, ...items),
+            r.orphanFiles.length || r.orphanRecords.length ? this.orphanButton() : "",
+            r.missingFiles.length || r.damaged.length ? h("p", { class: "small" }, "Sách mất file hoặc file bị hỏng: khôi phục từ bản sao lưu, hoặc xóa rồi nhập lại file gốc (ghi chú giữ được nếu nhập lại đúng file).") : "",
+          ),
         );
       }
     }
     this.integrityBox.replaceChildren(...body.filter((x): x is HTMLElement => !!x));
+  }
+
+  private orphanButton(): HTMLElement {
+    const b = h("button", { class: "btn btn-small", type: "button", "data-testid": "st-fix-orphans" }, "Dọn dữ liệu mồ côi");
+    b.addEventListener("click", async () => {
+      b.setAttribute("disabled", "");
+      const r = await removeOrphans(this.deps.meta, this.deps.files);
+      toast(`Đã dọn ${r.files} file và ${r.records} mục không thuộc sách nào.`);
+      await this.runCheck(false);
+      await this.remeasure();
+    });
+    return h("div", { class: "st-actions" }, b);
   }
 
   private async runCheck(deep: boolean): Promise<void> {

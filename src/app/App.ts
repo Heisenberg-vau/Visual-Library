@@ -26,6 +26,7 @@ import type { DailyGoal } from "../ui/library/GoalRing";
 import { Ambience } from "../ui/study/Ambience";
 import { PlannerView } from "../ui/study/PlannerView";
 import { StorageView } from "../ui/storage/StorageView";
+import { thawFlow } from "../ui/storage/cold";
 import type { FileStore } from "../core/storage/FileStore";
 import { StudySession } from "../ui/study/StudySession";
 
@@ -175,6 +176,13 @@ export class App {
 
   async start(): Promise<void> {
     await Promise.all([this.ambience.init(), this.study.init()]);
+    // anything a closed app left half done
+    await this.library
+      .repairOnStart()
+      .then((r) => r.removed.length + r.thawed.length && console.info("repaired after interruption", r))
+      .catch((e) => console.error("repair", e));
+    // the trash keeps things for 30 days
+    await this.library.purgeTrash().catch((e) => console.error("purge trash", e));
     void this.index.enqueueAll();
     await this.showHome();
     // Reload while reading -> reopen the same book.
@@ -252,6 +260,14 @@ export class App {
 
   async open(book: BookMeta, push = true): Promise<void> {
     if (this.opening || this.reader) return;
+    const now = await this.library.get(book.id);
+    if (now?.cold) {
+      // a book in cold storage opens once its file is back
+      if (!(await thawFlow(now, this.library))) return;
+      this.index.enqueue(book.id);
+      await this.home?.refresh?.();
+      book = (await this.library.get(book.id)) ?? book;
+    }
     this.opening = true;
     document.body.classList.add("busy");
     try {
@@ -323,7 +339,22 @@ export class App {
       await this.closeReader(false, false);
       history.replaceState(null, "", location.pathname + location.search);
     }
-    this.storage = new StorageView({ meta: this.meta, files: this.files, onBack: () => history.back() });
+    this.storage = new StorageView({
+      meta: this.meta,
+      files: this.files,
+      library: this.library,
+      onBack: () => history.back(),
+      beforeFreeze: (id) => this.index.remove(id),
+      clearIndex: async () => {
+        for (const b of await this.library.listAll()) {
+          if (b.kind !== "pdf") continue;
+          await this.index.remove(b.id);
+          await this.textStore.deleteBook(b.id);
+          await this.meta.update(b.id, { indexDone: false });
+        }
+        void this.index.enqueueAll();
+      },
+    });
     history.pushState({ storage: true }, "", "#storage");
     this.home?.pause();
     this.root.replaceChildren(this.storage.el);
@@ -349,6 +380,13 @@ export class App {
     const b = await this.library.get(bookId);
     if (!b) {
       toast("Sách/vở này không còn trên kệ.", "error");
+      return;
+    }
+    if (b.trashedAt) {
+      toast(`“${b.title}” đang ở thùng rác.`, "error", 6000, {
+        label: "Lấy lại",
+        run: () => void this.library.untrash(b.id).then(() => this.openAt(bookId, page)),
+      });
       return;
     }
     if (page) await this.library.savePosition(b.id, Math.min(page, b.pageCount), b.zoom);

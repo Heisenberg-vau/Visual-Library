@@ -2,7 +2,7 @@
 // Usage: npm run build && npm run fixtures && npm run test:e2e
 //   HEAVY=1 also runs the 200 MB file test (needs `node scripts/make-fixtures.mjs --heavy`).
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
@@ -1375,6 +1375,7 @@ test("v1.2: the desk holds 6 at most; dusty books get a reminder", async () => {
   await page.waitForSelector('[data-testid="home3d"][data-ready="1"]');
   await W(() => window.__world.goTo({ kind: "desk" }));
   await page.waitForFunction(() => window.__world.idle);
+  await page.waitForFunction(() => document.querySelector('[data-testid="desk-count"]')?.textContent === "TRÊN BÀN · 6/6", null, { timeout: 10000 }).catch(() => {});
   assert.equal(await page.textContent('[data-testid="desk-count"]'), "TRÊN BÀN · 6/6");
   assert.equal(await page.locator('[data-testid="desk-dust"]').count(), 1, "one dusty book");
   assert.match(await page.locator('[data-testid="desk-dust"]').textContent(), /20 ngày chưa mở/);
@@ -1641,7 +1642,7 @@ test("v1.1: favourite from the pulled-out book; import lands on the stack you st
   // import while standing at this stack
   const n0 = await W(() => window.__world.info().books);
   await page.setInputFiles('[data-testid="h3-file-input"]', [`${FIX}/scan-pause.pdf`, `${FIX}/small.pdf`]);
-  await page.waitForSelector(".toast");
+  await page.waitForSelector(".toast", { timeout: 90000 }); // slow CI machines took >30 s here
   await page.waitForTimeout(1500);
   assert.equal(await W(() => window.__world.info().books), n0, "both already on a shelf: duplicates are not added twice");
   // back to the list view for the remaining tests
@@ -1651,7 +1652,7 @@ test("v1.1: favourite from the pulled-out book; import lands on the stack you st
 });
 
 test("v2.0: Kho lưu trữ: sizes, an integrity check that finds planted problems, a disk test, a restart marker", async () => {
-  const nBooks = await W(async () => (await window.__app.library.list()).length);
+  const nBooks = await W(async () => (await window.__app.library.listAll()).length); // the trash counts too (shown as such)
   await W(() => window.__app.openStorage());
   await page.waitForSelector('[data-testid="st-books"] tbody tr');
   assert.equal(await page.locator('[data-testid="st-books"] tbody tr').count(), nBooks, "one row per book and notebook");
@@ -1754,6 +1755,107 @@ test("v2.1: a locked backup downloads, refuses a wrong password, and brings the 
   // and the log now knows these files are backed up
   await W(() => window.__app.openStorage());
   await page.waitForSelector('[data-testid="bk-last"]');
+  await page.click(".st-back");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="storage"]'));
+});
+
+test("v2.3: trash, cold storage (frost, bring back from the original), duplicates, orphan cleanup", async () => {
+  const small = await W(async () => (await window.__app.library.list()).find((b) => b.fileName === "small.pdf"));
+  assert.ok(small, "small.pdf is in the library");
+  // a book thrown away is kept, not gone
+  await W((id) => window.__app.library.delete(id), small.id);
+  await W(() => window.__app.openStorage());
+  await page.waitForSelector('[data-testid="trash-list"]');
+  assert.match(await page.textContent('[data-testid="trash-list"]'), /small|tự xóa hẳn sau 30 ngày/);
+  await page.locator('[data-testid="trash-list"] li', { hasText: small.title }).locator('[data-testid="trash-restore"]').click();
+  await page.waitForFunction((t) => ![...document.querySelectorAll('[data-testid="trash-list"] li')].some((li) => li.textContent.includes(t)), small.title);
+  assert.equal(await W(async (id) => (await window.__app.library.list()).some((b) => b.id === id), small.id), true);
+  assert.ok(await page.isVisible('[data-testid="dup-none"]'), "no duplicates in the test library");
+
+  // cold storage: pretend the book was last opened long ago, so it is suggested
+  await W((id) => window.__app.meta.update(id, { lastOpenedAt: Date.now() - 100 * 86_400_000 }), small.id);
+  await page.click(".st-back");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="storage"]'));
+  await W(() => window.__app.openStorage());
+  await page.waitForSelector('[data-testid="cold-candidates"]');
+  await page.locator('[data-testid="cold-candidates"] li', { hasText: small.title }).locator('[data-testid="cold-freeze"]').click();
+  await page.waitForSelector(".modal");
+  assert.match(await page.textContent(".modal"), /Cất vào kho lạnh/);
+  await page.locator(".modal .btn-primary").click();
+  await page.waitForSelector('[data-testid="cold-list"]');
+  assert.match(await page.textContent('[data-testid="cold-list"]'), new RegExp(small.title.slice(0, 5)));
+  assert.equal(await W(async (id) => { try { await window.__app.files.read(id); return true; } catch { return false; } }, small.id), false, "the file left the device");
+  // the integrity check knows it is on purpose
+  await page.click('[data-testid="st-check"]');
+  await page.waitForSelector('[data-testid="st-check-result"]', { timeout: 60000 });
+  assert.match(await page.textContent('[data-testid="st-check-result"]'), /Không thấy vấn đề nào/);
+  await shot("68-cold");
+  await page.click(".st-back");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="storage"]'));
+  // on the shelf: a frost badge; opening asks for the file
+  await page.waitForSelector('[data-testid="cold-badge"]');
+  await page.locator('[data-testid="book-card"]', { has: page.locator('[data-testid="cold-badge"]') }).first().click();
+  await page.waitForSelector('[data-testid="thaw-dialog"]');
+  await shot("69-thaw");
+  // a wrong file is refused, the book stays cold
+  let chooser = page.waitForEvent("filechooser");
+  await page.click('[data-testid="thaw-file"]');
+  await (await chooser).setFiles(`${FIX}/scan-pause.pdf`);
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /không phải bản gốc/.test(t.textContent)), null, { timeout: 30000 });
+  assert.ok(await W(async (id) => !!(await window.__app.library.get(id)).cold, small.id));
+  // the right one brings it back, and it opens where it was
+  await page.locator('[data-testid="book-card"]', { has: page.locator('[data-testid="cold-badge"]') }).first().click();
+  await page.waitForSelector('[data-testid="thaw-dialog"]');
+  chooser = page.waitForEvent("filechooser");
+  await page.click('[data-testid="thaw-file"]');
+  await (await chooser).setFiles(`${FIX}/small.pdf`);
+  await page.waitForSelector(".reader", { timeout: 60000 });
+  assert.equal(await W(async (id) => !!(await window.__app.library.get(id)).cold, small.id), false);
+  await page.goBack();
+  await page.waitForSelector('[data-testid="book-card"]');
+  assert.equal(await page.locator('[data-testid="cold-badge"]').count(), 0);
+
+  // a stray file (an import that never finished) is cleaned at the next start
+  await W(async () => { const d = await (await navigator.storage.getDirectory()).getDirectoryHandle("originals"); const w = await (await d.getFileHandle("stray-import", { create: true })).createWritable(); await w.write(new Uint8Array(1000)); await w.close(); });
+  await page.reload();
+  await page.waitForSelector('[data-testid="book-card"]', { timeout: 60000 });
+  assert.equal(await W(async () => (await window.__app.files.list()).includes("stray-import")), false, "removed on start");
+});
+
+test("v2.4: a big backup comes in parts; restoring refuses an incomplete set", async () => {
+  await W(() => (window.__backupPartMB = 0.5));
+  await W(() => window.__app.openStorage());
+  await page.waitForSelector('[data-testid="bk-full"]:not([disabled])');
+  await page.click('[data-testid="bk-full"]');
+  await page.click('[data-testid="bk-go"]'); // no password
+  await page.waitForFunction(() => window.__lastBackups?.length > 1, null, { timeout: 180000 });
+  const parts = await W(async () => {
+    const out = [];
+    for (const { blob, name } of window.__lastBackups) {
+      const u = new Uint8Array(await blob.arrayBuffer());
+      let s = "";
+      for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+      out.push({ name, b64: btoa(s) });
+    }
+    return out;
+  });
+  assert.ok(parts.length >= 2, `several parts (${parts.length})`);
+  assert.match(parts[0].name, /-full-p1of\d+\.vlbak$/);
+  // through real files: Playwright refuses buffers over 50 MB in one call
+  mkdirSync("/tmp/vl-parts", { recursive: true });
+  const files = parts.map((p) => {
+    const path = `/tmp/vl-parts/${p.name}`;
+    writeFileSync(path, Buffer.from(p.b64, "base64"));
+    return path;
+  });
+  // one part missing: refused, nothing changes
+  await page.setInputFiles('[data-testid="bk-restore-input"]', files.slice(1));
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /còn thiếu phần 1\//.test(t.textContent)), null, { timeout: 120000 });
+  // all parts: the confirmation appears (cancelled here: the v2.1 test already restores)
+  await page.setInputFiles('[data-testid="bk-restore-input"]', files);
+  await page.waitForSelector(".modal .btn-danger", { timeout: 120000 });
+  await page.locator(".modal .btn", { hasText: "Hủy" }).click();
+  await W(() => delete window.__backupPartMB);
   await page.click(".st-back");
   await page.waitForFunction(() => !document.querySelector('[data-testid="storage"]'));
 });
@@ -1912,6 +2014,14 @@ test("milestone 2: data saved by v0.1.0 still loads", async () => {
 
 test("deletes a book from the shelf", async () => {
   const n = await cards().count();
+  await cards().filter({ hasText: "3 pages" }).locator(".card-more").click();
+  await page.locator(".menu-item", { hasText: "Xóa" }).click();
+  await page.locator(".modal .btn-primary").click();
+  await page.waitForFunction((k) => document.querySelectorAll('[data-testid="book-card"]').length === k, n - 1);
+  // v2.3: it went to the trash, and "Hoàn tác" brings it back
+  assert.match(await page.textContent(".toast:last-child"), /thùng rác/);
+  await page.locator('[data-testid="toast-action"]').last().click();
+  await page.waitForFunction((k) => document.querySelectorAll('[data-testid="book-card"]').length === k, n);
   await cards().filter({ hasText: "3 pages" }).locator(".card-more").click();
   await page.locator(".menu-item", { hasText: "Xóa" }).click();
   await page.locator(".modal .btn-primary").click();

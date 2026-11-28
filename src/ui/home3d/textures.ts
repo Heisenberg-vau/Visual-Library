@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { paintFrost } from "./stacks";
 
 /**
  * Procedural materials (no downloads needed): wood grain, floor planks,
@@ -142,7 +143,7 @@ export function corkTexture(): THREE.CanvasTexture {
 export type SpineStyle = "up" | "down";
 
 /** Leather (or cloth) spine with gilt bands and the title along it. */
-export function spineTexture(title: string, color: string, seed: number, style: SpineStyle, cloth = false): THREE.CanvasTexture {
+export function spineTexture(title: string, color: string, seed: number, style: SpineStyle, cloth = false, frost = false): THREE.CanvasTexture {
   const W = 128;
   const H = 640;
   const [c, ctx] = canvas(W, H);
@@ -210,6 +211,7 @@ export function spineTexture(title: string, color: string, seed: number, style: 
   ctx.fillStyle = cloth ? "#f3ead2" : g;
   ctx.fillText(title, 0, 0);
   ctx.restore();
+  if (frost) paintFrost(ctx, W, H, r);
   const t = tex(c);
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   return t;

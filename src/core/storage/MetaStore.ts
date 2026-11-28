@@ -45,7 +45,13 @@ export class MetaStore {
    * overwrite each other with stale copies.
    */
   async update(id: string, patch: Partial<BookMeta>): Promise<BookMeta | undefined> {
-    const out = await updateRecords<BookMeta>(STORES.books, [id], (cur) => (cur ? { ...normalize(cur), ...patch, id } : undefined));
+    const out = await updateRecords<BookMeta>(STORES.books, [id], (cur) => {
+      if (!cur) return undefined;
+      const next: Record<string, unknown> = { ...normalize(cur), ...patch, id };
+      // `undefined` in a patch removes the field (leaving the trash, out of cold storage)
+      for (const [k, v] of Object.entries(patch)) if (v === undefined) delete next[k];
+      return next as unknown as BookMeta;
+    });
     return out.get(id);
   }
 

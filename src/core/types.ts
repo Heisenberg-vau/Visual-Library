@@ -35,6 +35,10 @@ export interface BookMeta {
   indexDone?: boolean;
   /** Imported from this format (the stored original keeps it). */
   source?: "docx";
+  /** In the trash since (ms): hidden everywhere, files kept; gone for good after 30 days. */
+  trashedAt?: number;
+  /** Cold storage: the file is off the device, notes/cover/place stay. `backup` names the backup file that holds it. */
+  cold?: { at: number; backup?: string };
 }
 
 /** A shelf. Shelves nest: "Hàng không" > "Động cơ". */

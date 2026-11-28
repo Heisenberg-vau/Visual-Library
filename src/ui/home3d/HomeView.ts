@@ -145,15 +145,20 @@ export class HomeView {
   }
 
   /** Called whenever the home screen is shown. Rebuilds only if the library changed. */
+  private refreshGen = 0;
+
   async refresh(): Promise<void> {
     const world = this.ensureWorld();
     world.resume();
+    const gen = ++this.refreshGen;
     const [books, cats, reading, desk] = await Promise.all([this.deps.library.list(), this.deps.library.listCategories(), this.deps.loadReading(), this.deps.loadDesk()]);
+    // two refreshes in flight: only the newest one's data counts (an older read could predate a change)
+    if (gen !== this.refreshGen) return;
     this.reading = reading;
     this.books = new Map(books.map((b) => [b.id, b]));
     this.desk = desk.filter((d) => this.books.has(d.id));
     const sig = JSON.stringify([
-      books.map((b) => [b.id, b.title, b.categoryId, b.pageCount, b.favorite, b.lastPage > 1, b.kind]),
+      books.map((b) => [b.id, b.title, b.categoryId, b.pageCount, b.favorite, b.lastPage > 1, b.kind, !!b.cold]),
       cats.map((c) => [c.id, c.name, c.parentId]),
       this.spineStyle,
     ]);
@@ -212,7 +217,7 @@ export class HomeView {
       while (c?.parentId && byId.get(c.parentId)?.parentId) c = byId.get(c.parentId)!;
       return c?.parentId ? c : null;
     };
-    const coll = new Intl.Collator("vi");
+    const coll = new Intl.Collator("vi", { numeric: true });
     const roots = cats.filter((c) => !c.parentId).sort((a, b) => a.createdAt - b.createdAt);
     const stacks: WorldStack[] = roots.map((r) => {
       const children = cats.filter((c) => c.parentId === r.id).sort((a, b) => a.createdAt - b.createdAt);
@@ -247,7 +252,8 @@ export class HomeView {
     return {
       id: b.id,
       title: b.title,
-      subtitle: nb ? `Vở · ${b.pageCount} trang` : `${b.pageCount} trang${b.source === "docx" ? " · Word" : ""}`,
+      subtitle: nb ? `Vở · ${b.pageCount} trang` : `${b.pageCount} trang${b.source === "docx" ? " · Word" : ""}${b.cold ? " · ❄ kho lạnh" : ""}`,
+      cold: !!b.cold,
       pages: b.pageCount,
       color: this.colors.get(b.id) ?? fallbackColor(b.id, nb),
       cloth: nb,
@@ -759,6 +765,7 @@ export class HomeView {
       const dup = results.filter((r) => r.status === "duplicate").length;
       if (added) toast(`Đã thêm ${added} tài liệu${stackId ? " vào tủ này" : " vào tủ Chưa xếp kệ"}.`);
       if (dup) toast(`${dup} tài liệu đã có trên kệ.`);
+      for (const r of results) if (r.status === "returned") toast(r.from === "cold" ? `“${r.book.title}” đã ra khỏi kho lạnh, ghi chú còn nguyên.` : `“${r.book.title}” được lấy lại từ thùng rác.`);
       if (!had && added) this.deps.onFirstImport();
     } finally {
       this.busy = false;
